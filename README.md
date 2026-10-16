@@ -21,9 +21,16 @@ Aleria Judge is built by [Aleria AI](https://aleria.ai). Aleria builds sovereign
 
 ## Results
 
-Aleria Judge 1.1.0 with every default (BF16, effort `high`, 560 soft tokens per image) on one RTX PRO 6000 Blackwell Server Edition, one request at a time through the HTTP API, scored with the official [Decision Index](https://github.com/apolinario/decision-index) kit at [`f8552a1`](https://github.com/apolinario/decision-index/tree/f8552a13b643d39f61185f5951bb5fed16bedf51):
+Aleria Judge 1.2.1 adds one change to 1.1.0: every prompt first lists all of the request's questions, so each question is answered knowing what else is asked ([release 1.2.1](docs/method.md#release-121)). Every default (BF16, effort `high`, 560 soft tokens per image), one request at a time through the HTTP API, official [Decision Index](https://github.com/apolinario/decision-index) kit (edition 0.3), on H100 PCIe 80 GB with one server per GPU:
 
-| | Score | Requests | Latency per request: median / p80 / mean |
+| | 1.2.1 | 1.1.0, same GPUs | Latency per request, 1.2.1: median / p80 / mean | 1.1.0 |
+| --- | --- | --- | --- | --- |
+| Decision Index 0.3, public part | **63.43** | 60.20 | 104 / 387 / 319 ms | 95 / 357 / 279 ms |
+| Decision Index Vision 0.3, public part | **74.06** | 73.54 | 245 / 310 / 296 ms | 234 / 300 / 288 ms |
+
+Both text runs answered all 140,178 scored requests and the vision runs all 12,210. 1.2.1 has not been run on an RTX PRO 6000 yet. There, 1.1.0 scored:
+
+| 1.1.0, one RTX PRO 6000 Blackwell Server Edition | Score | Requests | Latency per request: median / p80 / mean |
 | --- | --- | --- | --- |
 | Decision Index 0.3.2, public part | **60.23** | 140,620 of 140,620 answered | 97 / 393 / 312 ms |
 | Decision Index Vision 0.3.2, public part | **73.38** | 12,210 of 12,210 answered | 245 / 299 / 295 ms |
@@ -77,7 +84,7 @@ All settings, checks and operations: [docs/deploy.md](docs/deploy.md).
 
 ## How it works
 
-Each question becomes a few prompts (*branches*) in the state-first layout of [Mapika/decider](https://github.com/Mapika/decider): the state, one question, its options with single-token labels, and `Answer: (`. The engine prefills each branch once and reads the softmax over the label tokens. For a four-option question:
+Each question becomes a few prompts (*branches*) in the state-first layout of [Mapika/decider](https://github.com/Mapika/decider): the list of all the request's questions, the state, one question, its options with single-token labels, and `Answer: (`. The list and the state are the same in every branch of a request, so the engine computes them once. The engine prefills each branch once and reads the softmax over the label tokens. For a four-option question:
 
 ```
            labels (A)(B)(C)(D)
@@ -100,11 +107,11 @@ Each request can trade accuracy for latency with a header (`X-Decision-Effort: l
 
 | `effort` | What each question gets | Branches / question | Decision Index 0.3 |
 | --- | --- | --- | --- |
-| `low` | one order | 1.0 | no full run |
+| `low` | one order | 1.0 | 62.45 |
 | `medium` | two orders; rating of every two-option question in both orders; temperature on the rest | 3.34 | no full run |
-| `high` (default) | all four views above | 3.43 | 60.23 |
+| `high` (default) | all four views above | 3.43 | 63.43 |
 
-The index is the full public part, BF16 on one RTX PRO 6000; `low` and `medium` have no full run. Every response reports the effort that ran in `usage.effort`. Request and response format, status codes and the playground: [docs/api.md](docs/api.md).
+The index is the full public part with 1.2.1, BF16 on H100 PCIe 80 GB (`low`: 70 / 228 / 201 ms median / p80 / mean per request; `high`: 104 / 387 / 319 ms); `medium` has no full run. Every response reports the effort that ran in `usage.effort`. Request and response format, status codes and the playground: [docs/api.md](docs/api.md).
 
 ## Repository layout
 

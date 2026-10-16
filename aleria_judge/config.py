@@ -12,11 +12,16 @@ from .checkpoint import CHECKPOINTS, say
 from .images import SOFT_TOKENS
 from .method import profile
 
-# The settings of the evaluated Decision Index run; they are also the defaults. cache_fraction 0.7: at 1,120 soft
+# The settings of the evaluated Decision Index run; they are also the defaults, except context_length (CONTEXT_LENGTH
+# below). cache_fraction 0.7: at 1,120 soft
 # tokens per image (the largest budget) the vision encoder needs the headroom (0.8 ran out of memory in the encoder on an H100 80 GB);
 # text only (vision false) can use 0.8.
 EVALUATED = {'checkpoint': 'bf16', 'default_effort': 'high', 'vision': True, 'image_soft_tokens': SOFT_TOKENS,
              'context_length': 65536, 'branch_slots': 32, 'prefill_tokens': 2048, 'cache_fraction': 0.7}
+# Tokens per branch when context_length is 0, by engine. Lean: 131,072, run on an H100 80 GB with every long request of
+# the index (up to ~97k tokens with the question list) and synthetic 127k-token states answered. TensorRT-LLM keeps the
+# evaluated 65,536: its KV cache must hold a whole branch at startup, and the NVFP4 path has not run longer branches.
+CONTEXT_LENGTH = {'lean': 131072, 'trt': 65536}
 NVFP4_BACKENDS = ('cutlass', 'cublaslt', 'cuda_core', 'cutedsl', 'marlin')
 TRUE, FALSE = ('1', 'true', 'yes'), ('0', 'false', 'no')
 # Up to 1.1.0 the service was MORJ and its settings MORJ_*; those names still work, with a warning, when the
@@ -45,7 +50,7 @@ class Settings:
     model_path: str = ''      # empty: a checkpoint mounted at /model, else the pinned revision from the HF cache
     tokenizer_path: str = ''  # empty: the overlay of canonical tokenizer files is built under ~/.cache at startup
     model_name: str = ''      # empty: the name the checkpoint was evaluated under (gemma-4-31b-trt / -nvfp4-trt)
-    context_length: int = 65536
+    context_length: int = 0  # tokens per branch; 0: the engine's default (CONTEXT_LENGTH)
     # Method: the effort profile of requests that name none. The official kit names none.
     default_effort: str = 'high'
     # TensorRT-LLM capacity
@@ -83,6 +88,8 @@ class Settings:
     trace: bool = True  # POST /v1/trace: answers plus every branch's prompt, cache reuse, timing and readout
 
     def __post_init__(self):
+        if self.context_length == 0:  # resolved here, so every reader sees the effective limit
+            object.__setattr__(self, 'context_length', CONTEXT_LENGTH.get(self.engine, CONTEXT_LENGTH['trt']))
         backends = [b for b in self.nvfp4_backends.split(',') if b]
         try:
             profile(self.default_effort)
@@ -141,8 +148,11 @@ class Settings:
 
 
 def differences(settings):
-    """Settings that differ from the evaluated run's, as {name: [value, evaluated value]}; empty when none do."""
-    return {k: [getattr(settings, k), v] for k, v in EVALUATED.items() if getattr(settings, k) != v}
+    """Settings that differ from the evaluated run's, as {name: [value, evaluated value]}; empty when none do. A longer
+    context_length is not a difference: it only admits longer requests, and requests within the evaluated length get the
+    same answers (checked at 131,072 on the lean engine: 200 index requests, every probability identical)."""
+    return {k: [getattr(settings, k), v] for k, v in EVALUATED.items()
+            if getattr(settings, k) != v and not (k == 'context_length' and getattr(settings, k) > v)}
 
 
 def verify_checkpoint(settings):

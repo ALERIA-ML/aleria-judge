@@ -1,6 +1,6 @@
 [project]
 name = "aleria-judge"
-version = "1.1.0"
+version = "1.2.1"
 description = "Aleria Judge: zero-shot structured decisions from stock Gemma 4 31B on one GPU, read from next-token distributions over several orders of the options."
 requires-python = ">=3.11"
 license = "Apache-2.0"

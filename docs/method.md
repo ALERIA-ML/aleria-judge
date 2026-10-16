@@ -9,7 +9,7 @@ chosen.
 ## A branch
 
 All prompts use the state-first chat layout of [Mapika/decider](https://github.com/Mapika/decider),
-vendored under Apache-2.0 in `aleria_judge/vendor/`. A prompt opens with a system turn describing the replies it reads, then contains the state (text as is; JSON indented by two spaces, exactly as sent), one question, its options
+vendored under Apache-2.0 in `aleria_judge/vendor/`. A prompt opens with a system turn describing the replies it reads, then lists every question of the request (`Questions that will be asked about the context:` and one `- <question>` line each, in request order; since 1.2.1), then contains the state (text as is; JSON indented by two spaces, exactly as sent), one question, its options
 with single-token labels (`(A)`, `(B)`, …, then two-letter labels up to 255 options) and `Answer: (`. Each
 option is shown as `name: description` (its name alone without a description), except that a name repeating one
 of the question's labels exactly (`A`, or `(A)` as shown) is dropped when the option has a description: rotated,
@@ -133,6 +133,55 @@ Where the gain over one order comes from, in native benchmark metrics:
 | BPoMP | 0.903 | 0.978 | second order |
 | HLE | 0.154 | 0.128 | regression (501 questions) |
 
+### Release 1.2.1
+
+Release 1.2.1 keeps 1.1.0's method and engine and adds one thing to every prompt: the list of all the request's
+questions, after the images and before `Context:`, one `- <question>` line each, in request order (a question is
+shown exactly as its own branch shows it). Every chunk and pass of a request lists all its questions, so all its
+branches share one prefix, computed once. The layout is the `header` layout of
+[wcole3/jev-brain](https://github.com/wcole3/jev-brain), whose Decision Index entry (stock Gemma 4 31B, one option
+order) reached 61.69. Full Decision Index 0.3 runs, BF16, lean engine, one sequential client per H100 PCIe 80 GB:
+
+| Run | Index | Knowledge | Language | Retrieval | Tools | Arts | p50 / p80 / p95 / mean ms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1.1.0 | 60.20 | 48.35 | 62.04 | 63.56 | 77.47 | 47.79 | 95 / 357 / 769 / 279 |
+| **1.2.1** | **63.43** | **50.91** | **67.98** | **66.14** | **78.87** | **50.42** | **104 / 387 / 799 / 319** |
+| 1.2.1, effort `low` (one order) | 62.45 | 49.87 | 67.55 | 65.85 | 78.30 | 45.95 | 70 / 228 / 570 / 201 |
+
+Latency is over the 140,178 scored requests. Decisions differ from 1.1.0 on 7.5% of the questions. The largest
+moves in skill points: ACOS +21.0 (each review asks 58-64 aspect-sentiment yes/no questions; alone, the model said
+yes about three times too often), CLadder +12.9, POP909-CL +12.0, VAST +11.6, iSarcasmEval +9.8, PhishNChips +8.1
+(each email is asked five phishing-signal questions beside the verdict), ANLI +6.3; NLI4CT −3.2 and cfcolor −1.0
+are the largest losses. Two orders still add about one point with the list (`low` 62.45 against `high` 63.43; BPoMP
+−13.6 with one order). The public vision suite gives 74.06 (1.1.0: 73.54, same GPU type).
+
+Outside the index (one sequential client per H100; paired 95% CI of 1.2.1 − 1.1.0, points). The multi-question sets
+were built for this check, with the question wording fixed before any result: MultiRC (SuperGLUE validation; one
+request per paragraph, one yes/no question per candidate answer, 4,848 questions) and UNFAIR-ToS (LexGLUE test; one
+request per Terms of Service sentence, a yes/no question per unfair-term category, 1,607 requests):
+
+| Set | 1.1.0 | 1.2.1 | Δ points (95% CI) |
+| --- | --- | --- | --- |
+| MultiRC, F1 over candidate answers | 87.29 | 89.12 | +1.83 (+0.96 to +2.72) |
+| UNFAIR-ToS, F1 over categories (yes answers: 854 → 562; 186 true) | 32.88 | 45.99 | +13.10 (+10.93 to +15.32) |
+| 14,038 single-question requests, 11 text datasets (accuracy) | 85.77 | 86.18 | +0.41 (+0.07 to +0.73) |
+| 16,979 single-question requests, 20 more text datasets | 81.32 | 81.28 | −0.04 (−0.49 to +0.39) |
+| 6,868 image requests, 5 datasets | 88.24 | 88.25 | +0.01 (−0.59 to +0.60) |
+| 2,000 SEED-Bench image questions | 81.35 | 81.35 | +0.00 (−0.50 to +0.50) |
+| LongReason-8k, 794 long-context questions | 79.09 | 79.97 | +0.88 (−1.13 to +2.90) |
+
+With a single question the list only repeats it before the state, and results are flat; the gain comes from
+requests that ask several questions about one state. Cost: the index's prompts compute 9% more tokens. Requests
+whose questions carry long texts pay most, because every question's text is in the shared prefix: BRIGHT and
+ToolRet (32 candidate documents each) take 6.3 and 4.1 s at the median (1.1.0: 2.8 and 2.1 s). The list also counts
+toward the branch limit (`CONTEXT_LENGTH`; the evaluated runs used 65,536): the longest scored public branch is 54,048 tokens, and
+the 380 long ToolRet and BRIGHT chunks that the 0.3 scorer excludes reach about 97,000 with the list. At a limit of
+131,072 on an H100 80 GB, all 442 excluded requests were answered (median 39 s, at most 89 s), and synthetic
+requests with a 127,000-token state or 96,000-112,000 tokens of question text were answered correctly; requests
+within 65,536 tokens get identical answers at the higher limit (200 requests). At 262,144, a 160,000-token state
+works and 192,000 tokens or more return 413 on that card. 1.2.1 therefore defaults to 131,072 tokens per branch on the
+lean engine; TensorRT-LLM keeps 65,536, as evaluated.
+
 ### Order averaging on a fine-tuned model
 
 Position bias is not only a stock-model problem. On [Cloudflare/clef](https://huggingface.co/Cloudflare/clef)
@@ -236,15 +285,19 @@ The TensorRT-LLM 1.3.0rc29 PyTorch backend through its `LLM` API, the same layer
 
 BF16 weights take 57.2 GiB on the GPU for the text tower, plus the vision tower when images are on. The
 evaluated run used a 65,536-token context, 32 branch slots, 2,048-token prefill chunks and a 0.7 KV cache
-fraction (headroom for the vision encoder); these are the defaults. They change speed and memory, not the
+fraction (headroom for the vision encoder); these are the defaults, except that the lean engine admits 131,072 tokens
+per branch since 1.2.1. They change speed and memory, not the
 method: other values are allowed ([deploy.md](deploy.md#settings)), logged at startup and reported in
 `/health`. In earlier runs, 4 against 32 branch slots gave the same decisions on 99.91% of answers.
 
 ## Disclosures
 
-- **Evaluated code.** The 1.1.0 runs (Decision Index 0.3 and the public vision suite on one RTX PRO 6000) were
-  served by exactly this release's code; only names have changed since (the package, settings and metrics), not the
-  prompts, the method or the engines. The 1.0.x Decision Index 0.3 run was served by the pre-release source of this code. Before
+- **Evaluated code.** The 1.2.1 runs (Decision Index 0.3, the public vision suite and the held-out sets on H100
+  PCIe 80 GB) were served by 1.1.0's code before the rename plus this release's question list; before release this
+  code was checked against it: identical token branches (both passes, 25,711 branches) on 3,000 seeded index
+  requests, 396 of them with several questions. The 1.1.0 runs (Decision Index 0.3 and the public vision suite on one RTX PRO 6000) were
+  served by this release's code without the question list; apart from the list, only names have changed since (the
+  package, settings and metrics), not the method or the engines. The 1.0.x Decision Index 0.3 run was served by the pre-release source of this code. Before
   release this code was checked against it: identical token branches, gate decisions and answers on fixed
   synthetic requests, and the same decisions on 300 random requests of the edition (760 of 760 questions).
 - **Temperature fit data.** The option-count temperature curve was fitted by negative log-likelihood on 512
@@ -267,18 +320,25 @@ method: other values are allowed ([deploy.md](deploy.md#settings)), logged at st
   also selected on index runs. The prompt changes of 1.0.1 were measured the same way, on index rows and then
   full runs, before release. The system turn's wording was not tuned: one pre-declared paraphrase gives the
   same index (60.25). The held-out datasets in [Release 1.0.1](#release-101) show the gain outside the index.
-- **Prior work.** The prompt layout comes from Mapika/decider, and the rating readout and mapping from
-  simple-jev v1. Order averaging and rating are well-known debiasing and calibration ideas. Our contribution
+  The question list of 1.2.1 was found by comparing our public index run with jev-brain's, row by row, and adopted
+  after one full public run; its held-out multi-question sets were chosen and worded before their results. A second
+  change, a system turn that mentions the list, was tested in the same night on the full index (63.20) and not
+  adopted.
+- **Prior work.** The prompt layout comes from Mapika/decider, the question list from wcole3/jev-brain, and the
+  rating readout and mapping from simple-jev v1. Order averaging and rating are well-known debiasing and calibration ideas. Our contribution
   is their combination, the disagreement gate, and the TensorRT-LLM serving path.
 
 ## Limitations
 
 - Images need the BF16 checkpoint; NVFP4 serves text only. At most 8 images per request.
 - BF16 is validated on H100 PCIe 80 GB and RTX PRO 6000 Blackwell Server Edition; NVFP4 on RTX PRO 6000.
-  This release has run the full Decision Index sharded over eight H100 PCIe 80 GB and on one RTX PRO 6000.
+  1.2.1 has run the full Decision Index sharded over seven H100 PCIe 80 GB; 1.1.0 also ran it on one RTX PRO 6000.
   Other GPUs are untested.
 - Depends on a TensorRT-LLM release candidate plus patches; upgrading means revalidating them.
 - Wide menus are costly: two orders double the option prefill, and gating can double it again.
+- Long question lists are costly too: every question's text is in each branch's prefix and counts toward the
+  branch limit (131,072 tokens by default on the lean engine, 65,536 on TensorRT-LLM; see [Release 1.2.1](#release-121)).
+  Such requests take seconds to minutes, and the lean engine runs one request at a time, so they delay the queue.
 - Probabilities are only partly calibrated: the rating and the temperature curve reduce Gemma's
   overconfidence, but a stated 0.9 is not guaranteed to be right 90% of the time on your task. If you act on
   `confidence` or a probability threshold, tune that threshold on your own labelled data.

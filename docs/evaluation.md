@@ -157,7 +157,7 @@ at a time after untimed warm-up rows. The run's own latency (`latency_ms` in `sc
 keep the GPU otherwise idle during it.
 
 Declare the capacity limits: text, plus up to 8 images per request (BF16; PNG, JPEG, WebP or GIF data URLs,
-5 MB each, 1,122 prompt tokens each); up to 65,536 tokens per branch; 1–255 Choice options and 2–10 Score
+5 MB each, 1,122 prompt tokens each); up to 131,072 tokens per branch (65,536 with `ENGINE=trt`); 1–255 Choice options and 2–10 Score
 levels; inputs never truncated and options never filtered.
 
 Disclose (see [method.md](method.md#disclosures)): an inference technique over a stock checkpoint; the

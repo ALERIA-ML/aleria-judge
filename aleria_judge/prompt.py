@@ -13,6 +13,8 @@ from .vendor import prompt, systemone
 
 MAX_QUESTIONS = 128
 DEFAULT_INSTRUCTIONS = 'Which answer fits the context?'
+# Every question of the request, listed before the state in the shared prefix (the "header" layout of jev-brain).
+QUESTION_LIST = 'Questions that will be asked about the context:\n{}\n\n'
 
 
 class PlainText:
@@ -88,17 +90,22 @@ class Builder:
         # None when the tokenizer has no single image token: such a builder serves text only.
         self.image_id = image_id if tokenizer.encode('<|image|>', add_special_tokens=False) == [image_id] else None
 
-    def prepare(self, state, questions, profile=HIGH, images=0):
-        """First pass: the profile's orders per question, plus its rating branches of two-option questions."""
+    def prepare(self, state, questions, profile=HIGH, images=0, listed=None):
+        """First pass: the profile's orders per question, plus its rating branches of two-option questions.
+        `listed`: every question of the request, shown before the state (default: `questions`)."""
         with self.lock:
-            return self._build(state, questions, gated=False, profile=profile, images=images)
+            return self._build(state, questions, gated=False, profile=profile, images=images, listed=listed)
 
-    def extra(self, state, questions, images=0):
-        """Second pass: the remaining four-order rotations of gated questions."""
+    def extra(self, state, questions, images=0, listed=None):
+        """Second pass: the remaining four-order rotations of gated questions; `listed` as in prepare."""
         with self.lock:
-            return self._build(state, questions, gated=True, images=images)
+            return self._build(state, questions, gated=True, images=images, listed=listed)
 
-    def _build(self, state, questions, gated, profile=HIGH, images=0):
+    def listing(self, questions):
+        """The question list before the state: one '- <question text>' line per question, in request order."""
+        return QUESTION_LIST.format('\n'.join('- ' + self.render(spec).text for spec in questions.values()))
+
+    def _build(self, state, questions, gated, profile=HIGH, images=0, listed=None):
         if not 1 <= len(questions) <= MAX_QUESTIONS:
             raise ValueError(f'Requires 1–{MAX_QUESTIONS} questions')
         if images and self.image_id is None:
@@ -108,9 +115,11 @@ class Builder:
         # disables the vendored builder's truncation; capacity is checked below.
         # Images come first, as the API places them before the state: one <|image|> placeholder each, which
         # TensorRT-LLM expands to the image's soft tokens (labelled when there are several). They sit in every
-        # branch's shared prefix.
+        # branch's shared prefix. The list of all the request's questions follows them, before the state, so every
+        # pass and chunk of a request shares one prefix.
         pictures = self._images(images)
-        context_ids = pictures + self.text.encode('Context:\n' + context, add_special_tokens=False)
+        context_ids = pictures + self.text.encode(self.listing(listed or questions) + 'Context:\n' + context,
+                                                  add_special_tokens=False)
         branches = []
         for key, spec in questions.items():
             question = self.render(spec, self.label_names[:len(spec.get('criteria') or ())] if spec['type'] == 'choice' else ())

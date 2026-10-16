@@ -194,11 +194,13 @@ class Service:
 
     # Request path ------------------------------------------------------------
 
-    async def prepare(self, state, questions, gated=False, profile=method.HIGH, images=0):
-        """First-pass branches of the profile, or with `gated` the second-pass orders of these questions."""
+    async def prepare(self, state, questions, gated=False, profile=method.HIGH, images=0, listed=None):
+        """First-pass branches of the profile, or with `gated` the second-pass orders of these questions. `listed`:
+        every question of the request, shown before the state in every chunk and pass (default: `questions`)."""
         keys = list(questions)
-        build = partial(self.builder.extra, images=images) if gated else partial(self.builder.prepare, profile=profile,
-                                                                                 images=images)
+        listed = listed or questions
+        build = partial(self.builder.extra, images=images, listed=listed) if gated else partial(
+            self.builder.prepare, profile=profile, images=images, listed=listed)
         branches = []
         try:
             for start in range(0, len(keys), MAX_QUESTIONS):  # the builder takes at most 128 per call
@@ -240,7 +242,7 @@ class Service:
                     gated = disagreeing(branches, rows) if profile.gated else []
                     if gated:  # the orders disagree: score the other two rotations of those questions
                         extra = await self.prepare(state, {k: questions[k] for k in gated}, gated=True,
-                                                   images=len(images))
+                                                   images=len(images), listed=questions)
                         if extra:
                             passes.append((extra, *await self.score(extra, images, salt)))
                             decision['gated_questions'] = len(gated)

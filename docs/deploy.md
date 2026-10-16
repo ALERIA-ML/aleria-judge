@@ -63,14 +63,14 @@ Every setting has a default. Pass overrides in the shell, for example
 | `HF_TOKEN` | empty | Not needed for these Apache-2.0 checkpoints; a saved `hf auth login` token is also used |
 | `VISION` | `true` | Load Gemma 4's vision tower and accept `images`; `false` serves text only (required for `nvfp4`) |
 | `IMAGE_SOFT_TOKENS` | `560` | Vision tokens per image: 70, 140, 280 (the checkpoint's own default), 560 (the Decision Index vision board's budget for Gemma 4) or 1120 (native). TensorRT-LLM reads the budget only from the checkpoint's `processor_config.json`, so startup builds a symlinked copy of the checkpoint with that file edited (`checkpoint/image560` in the cache directory; no weights are copied) and refuses to start if the engine's budget differs |
-| `CONTEXT_LENGTH` | `65536` | Tokens per branch; a longer question is refused with 422, never truncated. Lower it to need less KV cache |
+| `CONTEXT_LENGTH` | `0` | Tokens per branch; `0` is the engine's default: 131,072 for `lean`, 65,536 for `trt`. A longer question is refused with 422, never truncated. Lower it to need less KV cache |
 | `CACHE_FRACTION` | `0.7` | Share of free GPU memory for the KV cache. 0.7 leaves the vision encoder its headroom at 1,120 tokens per image; text only (`VISION=false`) can use 0.8 |
 | `BRANCH_SLOTS` | `32` | Branches TensorRT-LLM runs at once |
 | `PREFILL_TOKENS` | `2048` | Prefill chunk size in tokens |
 | `NVFP4_BACKENDS` | empty | `nvfp4` only: GEMM backends (comma-separated); empty keeps TensorRT-LLM's Blackwell defaults |
 | `HOST_KV_CACHE_GB` | `0` | TensorRT-LLM's host KV tier in GB of pinned host RAM, where the V2 KV manager moves suspended and evicted pages. `0` (default): no tier. This service generates one token per branch and admits only what fits the GPU pool, so nothing was ever suspended and a tier stayed empty under every load tested (sequential, 8 and 32 concurrent clients, 8 x ~46k-token requests). `/metrics` counts TensorRT-LLM suspensions (`judge_kv_suspensions`), and without a tier each one is logged as a `kv_suspended` warning; set it (about the GPU KV quota: ~11 GiB on an H100, ~25 GiB on an RTX PRO 6000) if they ever appear. Values between 0 and 0.5 are refused, and TensorRT-LLM's own auto sizing is never used: under the default container `RLIMIT_MEMLOCK` (64 KB) it makes a one-block tier on which TensorRT-LLM 1.3.0rc29 can stop making progress on long multi-branch requests, and the stall guard then stops the service ([tensorrt-llm-patch.md](tensorrt-llm-patch.md#host-kv-tier)) |
 
-The defaults are the settings of the evaluated run. `CONTEXT_LENGTH`, `CACHE_FRACTION`, `BRANCH_SLOTS` and
+The defaults are the settings of the evaluated run, except `CONTEXT_LENGTH` on the lean engine: the run used 65,536, and 1.2.1 admits up to 131,072 (requests within 65,536 get the same answers; a longer limit is not reported as a difference). `CONTEXT_LENGTH`, `CACHE_FRACTION`, `BRANCH_SLOTS` and
 `PREFILL_TOKENS` change speed and memory, not the method; when any setting differs from the evaluated run
 (these, `CHECKPOINT`, `VISION`, `IMAGE_SOFT_TOKENS` or `DEFAULT_EFFORT`), startup logs the difference and
 `/health` lists it under `differs_from_evaluated`. Use the defaults for Decision Index runs.

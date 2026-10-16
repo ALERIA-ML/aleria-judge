@@ -32,6 +32,7 @@ def test_old_morj_settings_still_work_with_a_warning(capsys):
 
 def test_other_settings_are_reported_and_other_checkpoints_refused(tmp_path):
     assert differences(Settings()) == {}
+    assert differences(Settings(context_length=262144)) == {}  # a longer limit only admits longer requests
     changed = dict(context_length=32768, branch_slots=8, prefill_tokens=4096, cache_fraction=.8, vision=False)
     assert differences(Settings(**changed)) == {'vision': [False, True], 'context_length': [32768, 65536],
                                                 'branch_slots': [8, 32], 'prefill_tokens': [4096, 2048],
@@ -39,6 +40,15 @@ def test_other_settings_are_reported_and_other_checkpoints_refused(tmp_path):
     write_checkpoint(tmp_path)
     with pytest.raises(ValueError, match='differs from the pinned'):
         verify_checkpoint(Settings(model_path=str(tmp_path)))
+
+
+def test_context_length_defaults_by_engine():
+    assert Settings().context_length == 131072
+    assert Settings(engine='trt').context_length == 65536
+    assert Settings(context_length=40000).context_length == Settings(engine='trt', context_length=40000).context_length == 40000
+    assert Settings.from_env({'JUDGE_CONTEXT_LENGTH': '0', 'JUDGE_ENGINE': 'trt'}).context_length == 65536
+    with pytest.raises(ValueError, match='context_length must be at least 2'):
+        Settings(context_length=-1)
 
 
 def test_request_contract():
