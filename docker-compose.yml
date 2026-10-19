@@ -22,7 +22,7 @@ name: aleria-judge
 services:
   server:
     build: .
-    image: aleria-judge:1.1.0
+    image: aleria-judge:1.1.1
     init: true
     read_only: true
     network_mode: host
@@ -39,7 +39,7 @@ services:
       JUDGE_PORT: ${PORT:-30104}
       JUDGE_VISION: ${VISION:-true}        # false: text only
       JUDGE_IMAGE_SOFT_TOKENS: ${IMAGE_SOFT_TOKENS:-560} # per image: 70, 140, 280, 560 (vision board) or 1120 (native)
-      JUDGE_CONTEXT_LENGTH: ${CONTEXT_LENGTH:-65536}   # tokens per branch; longer prompts are refused
+      JUDGE_CONTEXT_LENGTH: ${CONTEXT_LENGTH:-0}       # tokens per branch (0: 131072 lean, 65536 trt); longer prompts are refused
       JUDGE_CACHE_FRACTION: ${CACHE_FRACTION:-0.7}     # trt: KV cache share of free GPU memory (text only can use 0.8)
       JUDGE_BRANCH_SLOTS: ${BRANCH_SLOTS:-32}          # trt: branches run at once
       JUDGE_PREFILL_TOKENS: ${PREFILL_TOKENS:-2048}    # trt: prefill chunk; these four: speed and memory only; see docs/deploy.md

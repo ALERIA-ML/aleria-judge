@@ -45,7 +45,7 @@ def test_shared_state_tokens_match_the_vendored_layout(tokenizer):
             return getattr(tokenizer, key)
 
         def encode(self, text, **kwargs):
-            if text.startswith('Context:\n'):
+            if text.startswith('Questions that will be asked about the context:\n') and '\n\nContext:\n' in text:
                 self.context_calls += 1
             return tokenizer.encode(text, **kwargs)
     counting = CountingTokenizer()
@@ -67,8 +67,12 @@ def test_shared_state_tokens_match_the_vendored_layout(tokenizer):
             rendered = systemone.render_question(questions[b.question])
             q = SimpleNamespace(text=rendered['question'], options=rendered['options'], gold=0)
             # Request content is encoded as plain text (PlainText), so the state's '<turn|>' stays characters.
+            # The vendored layout with the question list before "Context:" (QUESTION_LIST) as its context ids.
+            context_ids = PlainText(tokenizer).encode(builder.listing(questions) + 'Context:\n' + context,
+                                                      add_special_tokens=False)
             reference = prompt.build_chat(SimpleNamespace(context=context, qs=[q]), PlainText(tokenizer), builder.chat,
-                                          FixedOrder(b.order), max_options=255, max_ctx_tokens=65536)
+                                          FixedOrder(b.order), max_options=255, max_ctx_tokens=65536,
+                                          context_ids=context_ids)
             assert reference['ids'] == b.input_ids
 
 
@@ -97,11 +101,30 @@ def test_several_images_are_labelled_in_order(tokenizer):
     head = len(builder.chat.head)
     for a, b in zip(plain, labelled):
         text = tokenizer.decode(b.input_ids[head:]).replace('<|image|>', '#')
-        assert text.startswith('Image 1:\n#\nImage 2:\n#\nImage 3:\n#\nContext:\n')
+        assert text.startswith('Image 1:\n#\nImage 2:\n#\nImage 3:\n#\n'
+                               'Questions that will be asked about the context:\n- Which?\n\nContext:\n')
         assert b.input_ids.count(builder.image_id) == 3
         # everything from "Context:" on is the text-only prompt
         assert b.input_ids[len(b.input_ids) - len(a.input_ids) + head:] == a.input_ids[head:]
         assert b.segments[1] == len(b.input_ids) - len(a.input_ids) and b.segments[2:] == a.segments[2:]
+
+
+def test_every_branch_lists_all_questions_of_the_request_before_the_state(tokenizer):
+    from aleria_judge.prompt import Builder
+    builder = Builder(tokenizer)
+    listed = ('Questions that will be asked about the context:\n- Rain?\n- Better?\n- Raining?\n- Which?\n\n'
+              'Context:\nClouds.')
+    first = builder.prepare('Clouds.', QUESTIONS)
+    # a later pass or chunk scores a subset of the questions but lists all of them
+    second = builder.extra('Clouds.', {'three': QUESTIONS['three']}, listed=QUESTIONS)
+    shared = first[0].input_ids[:sum(first[0].segments[:3])]
+    assert tokenizer.decode(shared[len(builder.chat.head):]) == listed
+    for b in first + second:
+        head, images, state, body, tail = b.segments
+        assert b.input_ids[:head + images + state] == shared
+    alone = builder.extra('Clouds.', {'three': QUESTIONS['three']})
+    assert tokenizer.decode(alone[0].input_ids[len(builder.chat.head):]).startswith(
+        'Questions that will be asked about the context:\n- Which?\n\nContext:\nClouds.')
 
 
 def test_every_prompt_opens_with_the_system_turn(tokenizer):

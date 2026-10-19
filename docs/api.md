@@ -63,7 +63,7 @@ With `API_KEY` set, `/v1/*` needs `Authorization: Bearer <key>`.
 | `noul` | optional descriptions of `true` and `false` | `noul`: P(true) |
 
 `instructions` is optional text for the question. Inputs are never truncated and options are never dropped:
-a question whose prompt would exceed 65,536 tokens is rejected with 422.
+a question whose prompt would exceed the branch limit (`CONTEXT_LENGTH`: 131,072 tokens by default, 65,536 with `ENGINE=trt`) is rejected with 422.
 
 ### Images
 
@@ -147,7 +147,7 @@ Index score and latency of each effort: [method.md](method.md#effort-profiles).
 | 200 | Answered |
 | 401 | Missing or invalid API key |
 | 413 | Body over 64 MiB |
-| 422 | Invalid input, an unknown effort, or a question branch over 65,536 tokens |
+| 422 | Invalid input, an unknown effort, or a question branch over the branch limit (131,072 tokens by default) |
 | 499 | Client disconnected |
 | 503 | Not ready yet, or draining after a native failure (`Retry-After`) |
 | 504 | Deadline exceeded |

@@ -24,11 +24,13 @@ class Builder:
         self.chat = SimpleNamespace(head=[1])
         self.rating = SimpleNamespace(answer_tail=[9])
 
-    def prepare(self, state, questions, profile=HIGH, images=0):
+    def prepare(self, state, questions, profile=HIGH, images=0, listed=None):
         self.images = images
+        self.listed = listed
         return self._build(state, questions, False, profile, images)
 
-    def extra(self, state, questions, images=0):
+    def extra(self, state, questions, images=0, listed=None):
+        self.listed = listed
         return self._build(state, questions, True, images=images)
 
     def _build(self, state, questions, gated, profile=HIGH, images=0):

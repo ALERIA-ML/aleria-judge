@@ -46,7 +46,7 @@ def test_authentication_protects_inference_and_admin_endpoints(monkeypatch):
         listing = c.get('/v1/models', headers=auth).json()
         assert listing['object'] == 'list' and isinstance(listing['data'][0].pop('created'), int)
         assert listing['data'] == [{'id': 'gemma-4-31b-trt', 'object': 'model', 'owned_by': 'aleria',
-                                    'root': 'google/gemma-4-31B-it', 'parent': None, 'max_model_len': 65536}]
+                                    'root': 'google/gemma-4-31B-it', 'parent': None, 'max_model_len': 131072}]
         assert {'status', 'model', 'checkpoint', 'authentication', 'modalities', 'method'} <= set(c.get('/health').json())
         assert c.post('/v1/trace', json=PAYLOAD).status_code == 401
         assert c.get('/live').status_code == c.get('/metrics').status_code == 200
@@ -85,6 +85,7 @@ def test_requests_above_builder_limit_are_split_and_fully_answered():
         r = c.post('/v1/systemone', json={'state': 'x', 'questions': questions})
         assert r.status_code == 200 and list(r.json()['answers']) == list(questions)
         assert builder.calls == [128, 128, 44]
+        assert list(builder.listed) == list(questions)  # every chunk lists all 300 questions before the state
 
 
 GATED = {'split': {'type': 'choice', 'criteria': {'a': None, 'b': None, 'c': None, 'd': None}},
@@ -107,6 +108,7 @@ def test_second_pass_scores_two_more_orders_only_where_orders_disagree():
         assert engine.passes == [8, 2]
         assert r.json()['usage']['input_tokens'] == 6 * 3 + 2 * 4 + 2 * 3
         assert r.json()['answers']['agree']['choice'] == 'x'
+        assert list(builder.listed) == list(GATED)  # the second pass scores 'split' but lists every question of the request
         engine.passes.clear()
         assert c.post('/v1/systemone', json={'state': 'x', 'questions': {'agree': GATED['agree']}}).status_code == 200
         assert engine.passes == [2]
