@@ -26,12 +26,13 @@ Aleria Judge 1.1.1 adds one change to 1.1.0: every prompt first lists all of the
 | Aleria Judge | GPU | Decision Index 0.3 | Decision Index Vision 0.3 |
 | --- | --- | --- | --- |
 | 1.1.1 | H100 PCIe 80 GB | **63.43** · 104 / 387 / 319 ms | **74.06** · 245 / 310 / 296 ms |
+| 1.1.1 | RTX PRO 6000 Blackwell Server Edition | **63.46** · 119 / 403 / 320 ms | not run |
 | 1.1.0 | H100 PCIe 80 GB | 60.20 · 95 / 357 / 279 ms | 73.54 · 234 / 300 / 288 ms |
 | 1.1.0 | RTX PRO 6000 Blackwell Server Edition | 60.23 · 97 / 393 / 312 ms | 73.38 · 245 / 299 / 295 ms |
 
-Every run answered all 140,178 scored text requests and all 12,210 vision requests. 1.1.1 has not been run on an RTX PRO 6000 yet.
+Every run answered all 140,178 scored text requests and all 12,210 vision requests.
 
-The board labels edition 0.3 as 0.3.2 (panel `decision-index-0.3`). The suites were rebuilt with the kit and checked against its pinned rows: text corpus SHA-256 `9c83366c…`, the vision suite's 12,210 rows SHA-256 `f5f1cfb5…`, the same rows per benchmark as the board's vision file. These are our runs, not maintainer-reviewed board entries; the board measures its latency gate (median, mean and p80 at most 1,000 ms on one RTX PRO 6000) itself.
+The board labels edition 0.3 as 0.3.2 (panel `decision-index-0.3`). The suites were checked against the kit's pinned rows: the text rows' SHA-256 `b2b56d6f…` (uncompressed), the vision suite's 12,210 rows SHA-256 `f5f1cfb5…`, the same rows per benchmark as the board's vision file. These are our runs, not maintainer-reviewed board entries; the board measures its latency gate (median, mean and p80 at most 1,000 ms on one RTX PRO 6000) itself.
 
 ## Quickstart
 
