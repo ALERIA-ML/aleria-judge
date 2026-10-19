@@ -22,7 +22,7 @@ name: aleria-judge
 services:
   server:
     build: .
-    image: aleria-judge:1.2.1
+    image: aleria-judge:1.1.1
     init: true
     read_only: true
     network_mode: host
