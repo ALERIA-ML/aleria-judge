@@ -43,7 +43,7 @@ class Noul(Question):
 class Options(BaseModel):
     """Service extensions to the /v1/systemone request; clients that omit them get the service default."""
     model_config = ConfigDict(extra='forbid')
-    effort: str | None = None  # 'low', 'medium' or 'high'
+    effort: str | None = None  # 'low', 'medium', 'high' or 'xhigh'
 
 
 class EvaluationRequest(BaseModel):

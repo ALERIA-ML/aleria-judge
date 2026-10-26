@@ -17,6 +17,12 @@ A request chooses how much work each question gets with an effort profile (see
 4. Temperature. Letters of rated questions stay at T = 1. Every other
    question's per-order probabilities are softened with an option-count
    temperature T(n) before averaging. This never changes an order's argmax.
+
+`xhigh` is `high` without the nine-bin rating, with the request's input read
+twice: the shared prefix is the question list, the state, "Read the same input
+again before answering:" and the state again, so every state token of the second
+copy has seen the whole state. A request whose branches would not fit the context
+limit that way reads the state once (capacity only; nothing is truncated).
 """
 from dataclasses import dataclass
 import math
@@ -37,30 +43,34 @@ RATING_PREFIX = 'Rating: '
 @dataclass(frozen=True)
 class Profile:
     """How much work one request's questions get."""
-    name: str            # 'low', 'medium' or 'high'
+    name: str            # 'low', 'medium', 'high' or 'xhigh'
     orders: int          # first-pass candidate orders: 1 (original) or 2 (original and n // 2 rotation)
     rating: bool         # nine-digit rating of every two-option question, in both orders (needs two orders)
     gated: bool          # second pass with the n // 4 and 3n // 4 rotations where the two orders disagree (3+ options)
     temperature: bool    # option-count temperature on each order of unrated questions
+    read_twice: bool = False  # the state written twice in the shared prefix, when every branch still fits
 
     def summary(self):
         return {'profile': self.name, 'first_pass_orders': self.orders, 'rating': self.rating,
-                'gated_orders': self.gated, 'option_temperature': self.temperature}
+                'gated_orders': self.gated, 'option_temperature': self.temperature, 'read_twice': self.read_twice}
 
 
 # low = one order at T = 1: full Decision Index 0.2.1, 56.98 (one H100 PCIe 80 GB, BF16, sequential HTTP).
 # medium = two orders, rating, option-count temperature; no full run. high = medium + gated orders: full
 # Decision Index 0.3, 59.16 (BF16 on H100 PCIe 80 GB, six shards, sequential HTTP per shard).
+# xhigh = high without the rating, input read twice: full Decision Index 0.3 public part, 64.72 against 63.43 for the
+# 1.1.1 high (BF16 on H100 PCIe 80 GB, one sequential client per GPU; held-out accuracy unchanged).
 PROFILES = {p.name: p for p in (
     Profile('low', orders=1, rating=False, gated=False, temperature=False),
     Profile('medium', orders=2, rating=True, gated=False, temperature=True),
     Profile('high', orders=2, rating=True, gated=True, temperature=True),
+    Profile('xhigh', orders=2, rating=False, gated=True, temperature=True, read_twice=True),
 )}
-DEFAULT_EFFORT = 'high'
+DEFAULT_EFFORT = 'xhigh'
 
 
 def profile(effort=None):
-    """The profile for an effort name: 'low', 'medium' or 'high'."""
+    """The profile for an effort name: 'low', 'medium', 'high' or 'xhigh'."""
     name = effort or DEFAULT_EFFORT
     if name not in PROFILES:
         raise ValueError(f'Unknown effort {effort!r}; use one of {", ".join(PROFILES)}')

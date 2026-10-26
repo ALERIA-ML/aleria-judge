@@ -26,10 +26,10 @@ def test_answers_usage_and_headers():
     with TestClient(app_with()) as c:
         r = c.post('/v1/systemone', json=PAYLOAD, headers={'x-request-id': 'client-42:a.b'})
         assert r.status_code == 200
-        # two orders of three tokens, plus the pair's rating in both orders (four tokens each)
+        # the default effort, xhigh: two orders of three tokens, no rating
         assert set(r.json()['answers']) == {'q'}
-        assert r.json()['usage'] == {'input_tokens': 14, 'output_tokens': 0, 'cached_tokens': 6, 'image_tokens': 0,
-                                     'effort': 'high', 'branches': 4, 'images': 0}
+        assert r.json()['usage'] == {'input_tokens': 6, 'output_tokens': 0, 'cached_tokens': 2, 'image_tokens': 0,
+                                     'effort': 'xhigh', 'branches': 2, 'images': 0}
         assert r.headers['x-request-id'] == 'client-42:a.b'
         assert all(f'{stage};dur=' in r.headers['server-timing'] for stage in ('prepare', 'queue', 'inference'))
         unsafe = c.post('/v1/systemone', json=PAYLOAD, headers={'x-request-id': 'bad id\twith space'})
@@ -100,7 +100,7 @@ def pick_first_shown_except_agree(branch):
 
 def test_second_pass_scores_two_more_orders_only_where_orders_disagree():
     engine, builder = Engine(pick=pick_first_shown_except_agree), Builder()
-    with TestClient(app_with(engine=engine, builder=builder)) as c:
+    with TestClient(app_with(engine=engine, builder=builder, default_effort='high')) as c:
         engine.passes.clear()
         r = c.post('/v1/systemone', json={'state': 'x', 'questions': GATED})
         assert r.status_code == 200 and list(r.json()['answers']) == list(GATED)
@@ -125,7 +125,7 @@ def test_passes_of_one_request_share_a_cache_salt_that_no_other_request_gets():
 
 
 def test_trace_explains_the_same_answers():
-    with TestClient(app_with(engine=Engine(pick=pick_first_shown_except_agree))) as c:
+    with TestClient(app_with(engine=Engine(pick=pick_first_shown_except_agree), default_effort='high')) as c:
         payload = {'state': 'x', 'questions': GATED}
         plain = c.post('/v1/systemone', json=payload).json()
         traced = c.post('/v1/trace', json=payload).json()
@@ -293,8 +293,8 @@ def test_images_reach_the_builder_and_the_engine_in_order():
     with TestClient(app_with(builder=builder, engine=engine)) as c:
         r = c.post('/v1/systemone', json={**PAYLOAD, 'images': [png('red'), png('blue', (48, 16))]})
         assert r.status_code == 200 and r.json()['usage']['images'] == 2
-        # each of the four branches: its text, two placeholders, and what the engine expanded each image to
-        assert r.json()['usage']['input_tokens'] == 14 + 4 * 2 * IMAGE_TOKENS
+        # each of the two branches: its text, two placeholders, and what the engine expanded each image to
+        assert r.json()['usage']['input_tokens'] == 6 + 2 * 2 * IMAGE_TOKENS
         assert builder.images == 2
         assert [im.getpixel((0, 0)) for im in engine.images] == [(255, 0, 0), (0, 0, 255)]
         assert c.get('/health').json()['modalities'] == ['text', 'image']
@@ -340,10 +340,11 @@ def disagree(branch):
 
 
 @pytest.mark.parametrize('effort, profile, branches, passes', [
-    (None, 'high', 2 + 2 + 2 + 2 + 2 + 2, 2),    # pick: 2 orders + 2 gated; pair and flag: 2 orders + 2 ratings
-    ('high', 'high', 12, 2),
+    (None, 'xhigh', 8, 2),
+    ('high', 'high', 2 + 2 + 2 + 2 + 2 + 2, 2),  # pick: 2 orders + 2 gated; pair and flag: 2 orders + 2 ratings
     ('medium', 'medium', 2 + 2 + 2 + 2 + 2, 1),  # no gate; both two-option questions rated in both orders
     ('low', 'low', 1 + 1 + 1, 1),                # one order per question, nothing else
+    ('xhigh', 'xhigh', 2 + 2 + 2 + 2, 2),        # pick: 2 orders + 2 gated; pair and flag: 2 orders, no rating
 ])
 def test_effort_profiles_set_branches_and_passes(effort, profile, branches, passes):
     engine = Engine(pick=disagree)
@@ -377,6 +378,20 @@ def test_service_default_effort_applies_only_without_a_request_choice():
         assert c.post('/v1/systemone', json=THREE).json()['usage']['effort'] == 'low'
         assert c.post('/v1/systemone', json={**THREE, 'options': {'effort': 'high'}}).json()['usage']['effort'] == 'high'
         assert c.get('/health').json()['default_effort'] == 'low'
+
+
+def test_xhigh_reads_the_input_twice_in_every_pass_and_once_when_twice_does_not_fit():
+    builder = Builder()
+    with TestClient(app_with(Engine(pick=disagree), builder)) as c:
+        for state, effort, status, passes in [
+                ('A fact', 'xhigh', 200, [True, True]),           # first pass, then the gated pass, same prefix
+                ('fits once', 'xhigh', 200, [True, False, False]),  # twice fails the context limit: once, both passes
+                ('A fact', 'high', 200, [False, False]),
+                ('too long', 'xhigh', 422, [True, False])]:       # once does not fit either: inputs are never cut
+            start = len(builder.twice)
+            r = c.post('/v1/systemone', json={**THREE, 'state': state, 'options': {'effort': effort}})
+            assert r.status_code == status, r.text
+            assert builder.twice[start:] == passes
 
 
 def test_low_effort_answers_at_temperature_one():

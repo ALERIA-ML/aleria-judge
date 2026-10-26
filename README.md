@@ -67,7 +67,7 @@ ENGINE=trt CHECKPOINT=nvfp4 VISION=false docker compose up -d
 | --- | --- | --- |
 | `ENGINE` | `lean` | `lean`: each pass of a request is one forward over its prompts laid out as a token tree (BF16); `trt`: TensorRT-LLM, as in 1.0.1 (needed for `nvfp4`) |
 | `CHECKPOINT` | `bf16` | `bf16` or `nvfp4` (with `ENGINE=trt`) |
-| `DEFAULT_EFFORT` | `high` | Effort of requests that name none: `low`, `medium` or `high` |
+| `DEFAULT_EFFORT` | `xhigh` | Effort of requests that name none: `low`, `medium`, `high` or `xhigh` |
 | `GPU` | `0` | Physical GPU ordinal |
 | `PORT` | `30104` | Playground and API port |
 | `HOST` | `127.0.0.1` | `0.0.0.0` accepts remote clients; set `API_KEY` too |
@@ -101,15 +101,16 @@ The default engine lays out all branches of a request as one token tree: the sys
 
 ## Effort
 
-Each request can trade accuracy for latency with a header (`X-Decision-Effort: low`) or a field (`"options": {"effort": "low"}`); clients that send neither, including the Decision Index kit, get `high`.
+Each request can trade accuracy for latency with a header (`X-Decision-Effort: low`) or a field (`"options": {"effort": "low"}`); clients that send neither, including the Decision Index kit, get `xhigh`.
 
 | `effort` | What each question gets | Branches / question | Decision Index 0.3 |
 | --- | --- | --- | --- |
 | `low` | one order | 1.0 | 62.45 |
 | `medium` | two orders; rating of every two-option question in both orders; temperature on the rest | 3.34 | no full run |
-| `high` (default) | all four views above | 3.43 | 63.43 |
+| `high` | all four views above | 3.43 | 63.43 |
+| `xhigh` (default) | `high` without the rating, with the request's input written twice in the shared prefix (once when twice would not fit the context) | 2.08 | 64.72 |
 
-The index is the full public part with 1.1.1, BF16 on H100 PCIe 80 GB (`low`: 70 / 228 / 201 ms median / p80 / mean per request; `high`: 104 / 387 / 319 ms); `medium` has no full run. Every response reports the effort that ran in `usage.effort`. Request and response format, status codes and the playground: [docs/api.md](docs/api.md).
+The index is the full public part with 1.1.1, BF16 on H100 PCIe 80 GB (`low`: 70 / 228 / 201 ms median / p80 / mean per request; `high`: 104 / 387 / 319 ms); `medium` has no full run. `xhigh` is the same full public part on the same GPU type, with held-out accuracy unchanged against `high`; on a 2,000-request uniform sample of the index it ran at 106 / 452 / 345 ms. Every response reports the effort that ran in `usage.effort`. Request and response format, status codes and the playground: [docs/api.md](docs/api.md).
 
 ## Repository layout
 

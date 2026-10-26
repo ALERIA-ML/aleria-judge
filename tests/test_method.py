@@ -21,7 +21,15 @@ def test_two_orders_rotate_by_half_and_the_gate_adds_the_quarter_rotations():
 
 def test_every_two_option_question_is_rated_in_both_orders_when_the_profile_rates():
     assert rating_kinds(2) == rating_kinds(2, PROFILES['medium']) == ['rating', 'rating_rev']
-    assert rating_kinds(1) == rating_kinds(3) == rating_kinds(2, PROFILES['low']) == []
+    assert rating_kinds(1) == rating_kinds(3) == rating_kinds(2, PROFILES['low']) == rating_kinds(2, PROFILES['xhigh']) == []
+
+
+def test_xhigh_is_high_without_the_rating_reading_the_input_twice():
+    high, xhigh = PROFILES['high'], PROFILES['xhigh']
+    assert (xhigh.orders, xhigh.gated, xhigh.temperature) == (high.orders, high.gated, high.temperature)
+    assert not xhigh.rating and xhigh.read_twice
+    assert [name for name, p in PROFILES.items() if p.read_twice] == ['xhigh']
+    assert xhigh.summary()['read_twice'] and not high.summary()['read_twice']
 
 
 def test_option_count_temperature_curve():

@@ -15,6 +15,8 @@ MAX_QUESTIONS = 128
 DEFAULT_INSTRUCTIONS = 'Which answer fits the context?'
 # Every question of the request, listed before the state in the shared prefix (the "header" layout of jev-brain).
 QUESTION_LIST = 'Questions that will be asked about the context:\n{}\n\n'
+# Effort xhigh writes the state a second time after this line, so the second copy's tokens see the whole state.
+READ_AGAIN = '\n\nRead the same input again before answering:\n'
 
 
 class PlainText:
@@ -90,22 +92,25 @@ class Builder:
         # None when the tokenizer has no single image token: such a builder serves text only.
         self.image_id = image_id if tokenizer.encode('<|image|>', add_special_tokens=False) == [image_id] else None
 
-    def prepare(self, state, questions, profile=HIGH, images=0, listed=None):
+    def prepare(self, state, questions, profile=HIGH, images=0, listed=None, read_twice=False):
         """First pass: the profile's orders per question, plus its rating branches of two-option questions.
-        `listed`: every question of the request, shown before the state (default: `questions`)."""
+        `listed`: every question of the request, shown before the state (default: `questions`). `read_twice`: the
+        state written a second time after READ_AGAIN in the shared prefix."""
         with self.lock:
-            return self._build(state, questions, gated=False, profile=profile, images=images, listed=listed)
+            return self._build(state, questions, gated=False, profile=profile, images=images, listed=listed,
+                               read_twice=read_twice)
 
-    def extra(self, state, questions, images=0, listed=None):
-        """Second pass: the remaining four-order rotations of gated questions; `listed` as in prepare."""
+    def extra(self, state, questions, images=0, listed=None, read_twice=False):
+        """Second pass: the remaining four-order rotations of gated questions; `listed` and `read_twice` as in
+        prepare (a request's passes must share one prefix)."""
         with self.lock:
-            return self._build(state, questions, gated=True, images=images, listed=listed)
+            return self._build(state, questions, gated=True, images=images, listed=listed, read_twice=read_twice)
 
     def listing(self, questions):
         """The question list before the state: one '- <question text>' line per question, in request order."""
         return QUESTION_LIST.format('\n'.join('- ' + self.render(spec).text for spec in questions.values()))
 
-    def _build(self, state, questions, gated, profile=HIGH, images=0, listed=None):
+    def _build(self, state, questions, gated, profile=HIGH, images=0, listed=None, read_twice=False):
         if not 1 <= len(questions) <= MAX_QUESTIONS:
             raise ValueError(f'Requires 1–{MAX_QUESTIONS} questions')
         if images and self.image_id is None:
@@ -116,10 +121,13 @@ class Builder:
         # Images come first, as the API places them before the state: one <|image|> placeholder each, which
         # TensorRT-LLM expands to the image's soft tokens (labelled when there are several). They sit in every
         # branch's shared prefix. The list of all the request's questions follows them, before the state, so every
-        # pass and chunk of a request shares one prefix.
+        # pass and chunk of a request shares one prefix. With read_twice the state follows a second time, after
+        # READ_AGAIN, still inside that shared prefix: the second copy's tokens attend to the whole first copy.
         pictures = self._images(images)
-        context_ids = pictures + self.text.encode(self.listing(listed or questions) + 'Context:\n' + context,
-                                                  add_special_tokens=False)
+        text = self.listing(listed or questions) + 'Context:\n' + context
+        if read_twice:
+            text += READ_AGAIN + 'Context:\n' + context
+        context_ids = pictures + self.text.encode(text, add_special_tokens=False)
         branches = []
         for key, spec in questions.items():
             question = self.render(spec, self.label_names[:len(spec.get('criteria') or ())] if spec['type'] == 'choice' else ())

@@ -194,23 +194,36 @@ class Service:
 
     # Request path ------------------------------------------------------------
 
-    async def prepare(self, state, questions, gated=False, profile=method.HIGH, images=0, listed=None):
+    async def prepare(self, state, questions, gated=False, profile=method.HIGH, images=0, listed=None, read_twice=None):
         """First-pass branches of the profile, or with `gated` the second-pass orders of these questions. `listed`:
-        every question of the request, shown before the state in every chunk and pass (default: `questions`)."""
+        every question of the request, shown before the state in every chunk and pass (default: `questions`).
+        `read_twice`: the state written twice in the shared prefix; None leaves it to the profile, and a profile that
+        reads twice falls back to reading once when a branch would not fit the context limit that way. Returns the
+        branches and the choice made, which the request's later passes reuse (one shared prefix per request)."""
         keys = list(questions)
         listed = listed or questions
-        build = partial(self.builder.extra, images=images, listed=listed) if gated else partial(
-            self.builder.prepare, profile=profile, images=images, listed=listed)
-        branches = []
-        try:
+        twice = profile.read_twice if read_twice is None else read_twice
+
+        async def build_all(twice):
+            build = partial(self.builder.extra, images=images, listed=listed, read_twice=twice) if gated else partial(
+                self.builder.prepare, profile=profile, images=images, listed=listed, read_twice=twice)
+            branches = []
             for start in range(0, len(keys), MAX_QUESTIONS):  # the builder takes at most 128 per call
                 chunk = {k: questions[k] for k in keys[start:start + MAX_QUESTIONS]}
                 branches += await run_in_threadpool(build, state, chunk)
+            return branches
+
+        try:
+            try:
+                return await build_all(twice), twice
+            except ValueError as error:
+                if not (twice and read_twice is None and 'context limit' in str(error)):
+                    raise
+            return await build_all(False), False  # capacity only: the state once, nothing truncated
         except ValueError as error:
             raise HTTPException(422, f'{error}. Every question branch must fit in {self.settings.context_length} '
                                      'tokens including the state, instructions and all options; inputs are never '
                                      'truncated.') from error
-        return branches
 
     async def decide(self, state, questions, stages, decision, trace=False, profile=method.HIGH, urls=()):
         """Prepare, wait for a slot, score the profile's passes. Validation fails before any queue wait."""
@@ -221,7 +234,9 @@ class Service:
                 images = await run_in_threadpool(decode_images, list(urls)) if urls else []
             except ValueError as error:
                 raise HTTPException(422, str(error)) from None
-            branches = await self.prepare(state, questions, profile=profile, images=len(images))
+            branches, read_twice = await self.prepare(state, questions, profile=profile, images=len(images))
+            if profile.read_twice:
+                decision['read_twice'] = read_twice
             stages['prepare'], clock = ms(clock), time.perf_counter()
             acquired = await self.gate.acquire()
             stages['queue'], clock = ms(clock), time.perf_counter()
@@ -234,15 +249,17 @@ class Service:
             future = {}
             if profile.gated and getattr(self.engine, 'wants_future', False):
                 # every possible gated order, so the engine lays them into the request's tree and keeps its K/V
-                future = {'future': await self.prepare(state, questions, gated=True, images=len(images))}
+                future = {'future': (await self.prepare(state, questions, gated=True, profile=profile, images=len(images),
+                                                        read_twice=read_twice))[0]}
             try:
                 async with asyncio.timeout(self.settings.request_timeout):
                     rows, stats = await self.score(branches, images, salt, **future)
                     passes = [(branches, rows, stats)]
                     gated = disagreeing(branches, rows) if profile.gated else []
                     if gated:  # the orders disagree: score the other two rotations of those questions
-                        extra = await self.prepare(state, {k: questions[k] for k in gated}, gated=True,
-                                                   images=len(images), listed=questions)
+                        extra, _ = await self.prepare(state, {k: questions[k] for k in gated}, gated=True,
+                                                      profile=profile, images=len(images), listed=questions,
+                                                      read_twice=read_twice)
                         if extra:
                             passes.append((extra, *await self.score(extra, images, salt)))
                             decision['gated_questions'] = len(gated)

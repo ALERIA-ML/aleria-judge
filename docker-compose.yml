@@ -11,8 +11,8 @@
 #   CHECKPOINT=bf16   google/gemma-4-31B-it, BF16, about 62 GB (default; any GPU with 80 GB+)
 #   CHECKPOINT=nvfp4  nvidia/Gemma-4-31B-IT-NVFP4, about 33 GB (Blackwell); needs ENGINE=trt and VISION=false
 #
-# Requests pick their effort (low, medium, high) with the X-Decision-Effort header or
-# options.effort; DEFAULT_EFFORT applies when they name none (high).
+# Requests pick their effort (low, medium, high, xhigh) with the X-Decision-Effort header or
+# options.effort; DEFAULT_EFFORT applies when they name none (xhigh).
 #
 # Every setting has a default. Override any of them from the shell (or an optional .env):
 #   GPU=2 PORT=8080 docker compose up -d
@@ -34,7 +34,7 @@ services:
     environment:
       JUDGE_ENGINE: ${ENGINE:-lean}        # lean (one tree forward per pass) or trt (TensorRT-LLM)
       JUDGE_CHECKPOINT: ${CHECKPOINT:-bf16}
-      JUDGE_DEFAULT_EFFORT: ${DEFAULT_EFFORT:-high}
+      JUDGE_DEFAULT_EFFORT: ${DEFAULT_EFFORT:-xhigh}
       JUDGE_HOST: ${HOST:-127.0.0.1}      # 0.0.0.0 to accept remote clients (set API_KEY too)
       JUDGE_PORT: ${PORT:-30104}
       JUDGE_VISION: ${VISION:-true}        # false: text only

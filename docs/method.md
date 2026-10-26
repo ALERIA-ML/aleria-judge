@@ -2,9 +2,9 @@
 
 Aleria Judge answers a structured question without generating text. Each question becomes a few prompts
 (*branches*); the engine prefills each branch once, reads the next-token distribution over the option
-labels, and combines the branches into one answer. The default effort, `high`, combines four views of the
-same question. This page describes them, what each adds, how the engine runs them, and how the method was
-chosen.
+labels, and combines the branches into one answer. The default effort, `xhigh`, reads the input twice and
+combines two to four orders of the same question. This page describes them, what each adds, how the engine runs
+them, and how the method was chosen.
 
 ## A branch
 
@@ -202,6 +202,7 @@ The same service runs cheaper subsets of the views when a request asks for them
 | `low` | one order, T = 1 | 1.0 | no full run |
 | `medium` | two orders; rating of every two-option question in both orders; temperature on the rest | 3.34 | no full run |
 | `high` | the four views above | 3.43 | 60.23 |
+| `xhigh` (default) | `high` without the rating, input read twice (below) | 2.08 | 64.72 |
 
 Branch counts are averages over the Decision Index 0.3 questions. The extra views cost prefill only. On the lean
 engine every branch of a pass is computed in one forward over a token tree that holds the shared template, images
@@ -210,6 +211,24 @@ question cost about 2.3 times one at the median (one question, BF16 on one H100 
 four views 135 ms with truth questions rated in one order). The lean engine runs one request's pass at a time,
 about 3 requests/s on the index mix on one RTX PRO 6000 (mean 312 ms); the TensorRT-LLM engine sustains about 1.25
 requests/s on one H100 at any concurrency. Add GPUs for throughput.
+
+### `xhigh`: the input read twice
+
+The model reads left to right, so a state token never sees the state text after it. `xhigh` writes the state a
+second time in the shared prefix, after `Read the same input again before answering:`: the question list, the
+state, that line and the state again, then every branch as at `high`. Every token of the second copy has seen the
+whole first copy. The copy sits in the prefix the request's branches share, so it costs one extra read of the state
+per request, not per branch. A request whose branches would not fit the context limit that way reads the state once;
+nothing is truncated. `xhigh` also drops the nine-bin rating, which was neutral on top of the question list (+0.05 on
+the index without it) and saves two branches per two-option question.
+
+Measured on the full public part of Decision Index 0.3 (every scored request; BF16 on H100 PCIe 80 GB; question list
+and system turn as in 1.1.1): 64.72 against 63.43 for 1.1.1 at `high` (63.46 for the submitted 1.1.1 run). Largest
+gains: Home appliance +15.9, CRUXEval +11.1, HoVer +9.2, GSM8K +5.5 and BBH +5.5 skill points; largest losses:
+ToolRet −2.5, iSarcasmEval −2.5, FinEntity −2.3 and ACOS −1.7, mostly requests with many questions about a short
+input. On held-out sets outside the index the accuracy is unchanged (between −0.22 and +0.50 points on each half,
+none significant). Repeating the input follows shisa-ai/shisa-de-2 and the FlexDM entry on the Decision Index board,
+which repeat the whole user turn in every question's prompt; here the copy is shared.
 
 ## Engine
 
