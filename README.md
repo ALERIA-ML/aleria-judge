@@ -21,12 +21,13 @@ Aleria Judge is built by [Aleria AI](https://aleria.ai). Aleria builds sovereign
 
 ## Results
 
-Aleria Judge 1.1.1 adds one change to 1.1.0: every prompt first lists all of the request's questions, so each question is answered knowing what else is asked ([release 1.1.1](docs/method.md#release-111)). Every run uses every default (BF16, effort `high`, 560 soft tokens per image), one request at a time through the HTTP API, the official [Decision Index](https://github.com/apolinario/decision-index) kit (edition 0.3) on the public part of each index, and one server per GPU. Each cell gives the score, then latency per request as median / p80 / mean:
+Aleria Judge 1.1.2 makes effort `xhigh` the default: every prompt reads the request's input twice, and two-option questions are no longer rated ([`xhigh`](docs/method.md#xhigh-the-input-read-twice)). 1.1.1 added the list of all the request's questions to every prompt ([release 1.1.1](docs/method.md#release-111)). Every run uses every default (BF16, the release's default effort, 560 soft tokens per image), one request at a time through the HTTP API, the official [Decision Index](https://github.com/apolinario/decision-index) kit (edition 0.3) on the public part of each index, and one server per GPU. Each cell gives the score, then latency per request as median / p80 / mean:
 
 | Aleria Judge | GPU | Decision Index 0.3 | Decision Index Vision 0.3 |
 | --- | --- | --- | --- |
-| 1.1.1 | H100 PCIe 80 GB | **63.43** · 104 / 387 / 319 ms | **74.06** · 245 / 310 / 296 ms |
-| 1.1.1 | RTX PRO 6000 Blackwell Server Edition | **63.46** · 119 / 403 / 320 ms | not run |
+| 1.1.2 | H100 PCIe 80 GB | **64.73** · 111 / 494 / 369 ms | not run |
+| 1.1.1 | H100 PCIe 80 GB | 63.43 · 104 / 387 / 319 ms | **74.06** · 245 / 310 / 296 ms |
+| 1.1.1 | RTX PRO 6000 Blackwell Server Edition | 63.46 · 119 / 403 / 320 ms | not run |
 | 1.1.0 | H100 PCIe 80 GB | 60.20 · 95 / 357 / 279 ms | 73.54 · 234 / 300 / 288 ms |
 | 1.1.0 | RTX PRO 6000 Blackwell Server Edition | 60.23 · 97 / 393 / 312 ms | 73.38 · 245 / 299 / 295 ms |
 
