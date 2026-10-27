@@ -110,7 +110,9 @@ class Service:
             self.engine = await run_in_threadpool(LeanEngine, self.settings.model_path, shared_prefix=self.template_head(),
                                                   vision=self.settings.vision,
                                                   image_soft_tokens=self.settings.image_soft_tokens,
-                                                  vision_batch=self.settings.vision_encoder_batch)
+                                                  vision_batch=self.settings.vision_encoder_batch,
+                                                  vision_engine=self.settings.vision_engine,
+                                                  precision=self.settings.lean_precision)
         if self.engine is None:
             from .engine import Engine
             # TRT-LLM's executor must be created on the process's main thread.
@@ -454,6 +456,8 @@ def create_app(settings=None, *, engine=None, builder=None):
                 'checkpoint_path': settings.model_path, 'precision': settings.spec.precision,
                 'modalities': ['text', 'image'] if settings.vision else ['text'], 'authentication': bool(settings.api_key),
                 'image_soft_tokens': settings.image_soft_tokens if settings.vision else None,
+                'vision_engine': settings.vision_engine if settings.vision and settings.engine == 'lean' else None,
+                'lean_precision': settings.lean_precision if settings.engine == 'lean' else None,
                 'context_length': settings.context_length, 'prefill_tokens': settings.prefill_tokens,
                 'nvfp4_backends': settings.nvfp4_backends or 'default', 'branch_slots': settings.branch_slots,
                 'host_kv_cache_gb': settings.host_kv_cache_gb, 'differs_from_evaluated': differences(settings),

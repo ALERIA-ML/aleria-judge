@@ -76,8 +76,8 @@ def test_shared_state_tokens_match_the_vendored_layout(tokenizer):
             assert reference['ids'] == b.input_ids
 
 
-def test_images_sit_before_the_state_in_every_branch(tokenizer):
-    from aleria_judge.prompt import Builder
+def test_images_sit_after_the_question_list_and_before_the_state(tokenizer):
+    from aleria_judge.prompt import Builder, PlainText
     builder = Builder(tokenizer)
     questions = {'pick': {'type': 'choice', 'instructions': 'Which?', 'criteria': {'a': 'first', 'b': 'second', 'c': 'third'}},
                  'ok': {'type': 'noul', 'instructions': 'Is it fine?'}}
@@ -86,9 +86,14 @@ def test_images_sit_before_the_state_in_every_branch(tokenizer):
     head, image = list(builder.chat.head), builder.image_id
     assert image == tokenizer.convert_tokens_to_ids('<|image|>')
     assert [b.question for b in seen] == [b.question for b in plain] and [b.kind for b in seen] == [b.kind for b in plain]
+    listed = PlainText(tokenizer).encode(builder.listing(questions) + 'Context:\n', add_special_tokens=False)
+    state = PlainText(tokenizer).encode('The scene.', add_special_tokens=False)
     for a, b in zip(plain, seen):
-        # the same prompt with one bare <|image|> placeholder between the template head and "Context:"
-        assert b.input_ids == head + [image] + a.input_ids[len(head):]
+        # the question list and "Context:", one bare <|image|> placeholder, then the state
+        assert b.input_ids[:len(head) + len(listed) + 1 + len(state)] == head + listed + [image] + state
+        # without the placeholder it reads as the text-only prompt, and the question block and tail are its tokens
+        assert tokenizer.decode([t for t in b.input_ids if t != image]) == tokenizer.decode(a.input_ids)
+        assert b.input_ids[-sum(a.segments[3:]):] == a.input_ids[-sum(a.segments[3:]):]
         assert b.label_ids == a.label_ids and b.order == a.order
 
 
@@ -101,12 +106,23 @@ def test_several_images_are_labelled_in_order(tokenizer):
     head = len(builder.chat.head)
     for a, b in zip(plain, labelled):
         text = tokenizer.decode(b.input_ids[head:]).replace('<|image|>', '#')
-        assert text.startswith('Image 1:\n#\nImage 2:\n#\nImage 3:\n#\n'
-                               'Questions that will be asked about the context:\n- Which?\n\nContext:\n')
+        assert text.startswith('Questions that will be asked about the context:\n- Which?\n\nContext:\n'
+                               'Image 1:\n#\nImage 2:\n#\nImage 3:\n#\nThe scene.')
         assert b.input_ids.count(builder.image_id) == 3
-        # everything from "Context:" on is the text-only prompt
-        assert b.input_ids[len(b.input_ids) - len(a.input_ids) + head:] == a.input_ids[head:]
-        assert b.segments[1] == len(b.input_ids) - len(a.input_ids) and b.segments[2:] == a.segments[2:]
+        # the question block and tail are the text-only prompt's
+        assert b.input_ids[-sum(a.segments[3:]):] == a.input_ids[-sum(a.segments[3:]):]
+        assert b.segments[3:] == a.segments[3:]
+
+
+def test_text_only_prompts_are_unchanged_by_the_image_layout(tokenizer):
+    """Without images the question list, "Context:" and the state are encoded in one piece, as before images moved."""
+    from aleria_judge.prompt import READ_AGAIN, Builder, PlainText
+    builder = Builder(tokenizer)
+    for twice in (False, True):
+        text = builder.listing(QUESTIONS) + 'Context:\nClouds.' + (READ_AGAIN + 'Context:\nClouds.' if twice else '')
+        ids = list(builder.chat.head) + PlainText(tokenizer).encode(text, add_special_tokens=False)
+        for b in builder.prepare('Clouds.', QUESTIONS, read_twice=twice):
+            assert b.input_ids[:len(ids)] == ids
 
 
 def test_every_branch_lists_all_questions_of_the_request_before_the_state(tokenizer):
@@ -175,9 +191,11 @@ def test_content_that_spells_control_tokens_stays_text(tokenizer):
         content = b.input_ids[head:head + images + state + body]
         assert not special & set(content)
         assert spelled.split()[0] in tokenizer.decode(content)
-    # template pieces and image placeholders are still the real tokens
+    # template pieces and image placeholders are still the real tokens: the one placeholder follows "Context:\n"
     with_image = builder.prepare('x', {'n': questions['n']}, images=1)[0]
-    assert with_image.input_ids[len(builder.chat.head)] == builder.image_id
+    assert with_image.input_ids.count(builder.image_id) == 1
+    at = with_image.input_ids.index(builder.image_id)
+    assert tokenizer.decode(with_image.input_ids[:at]).endswith('\n\nContext:\n')
 
 
 def test_concurrent_builds_match_single_threaded_builds(tokenizer):

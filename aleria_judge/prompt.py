@@ -118,16 +118,22 @@ class Builder:
         context = systemone.render_state(state)
         # Tokenize the state once. Passing its true length as the context budget
         # disables the vendored builder's truncation; capacity is checked below.
-        # Images come first, as the API places them before the state: one <|image|> placeholder each, which
-        # TensorRT-LLM expands to the image's soft tokens (labelled when there are several). They sit in every
-        # branch's shared prefix. The list of all the request's questions follows them, before the state, so every
-        # pass and chunk of a request shares one prefix. With read_twice the state follows a second time, after
-        # READ_AGAIN, still inside that shared prefix: the second copy's tokens attend to the whole first copy.
+        # The list of all the request's questions comes first, so every pass and chunk of a request shares one prefix
+        # and the image tokens are computed after the questions they will answer. The images follow at the start of
+        # the context, before the state: one <|image|> placeholder each, which the engine expands to the image's
+        # soft tokens (labelled when there are several), inside every branch's shared prefix. With read_twice the
+        # state follows a second time, after READ_AGAIN, still inside that shared prefix (the images stay once).
+        # Without images the text is encoded in one piece, as before.
         pictures = self._images(images)
-        text = self.listing(listed or questions) + 'Context:\n' + context
+        head = self.listing(listed or questions) + 'Context:\n'
+        text = context
         if read_twice:
             text += READ_AGAIN + 'Context:\n' + context
-        context_ids = pictures + self.text.encode(text, add_special_tokens=False)
+        if pictures:
+            context_ids = (self.text.encode(head, add_special_tokens=False) + pictures
+                           + self.text.encode(text, add_special_tokens=False))
+        else:
+            context_ids = self.text.encode(head + text, add_special_tokens=False)
         branches = []
         for key, spec in questions.items():
             question = self.render(spec, self.label_names[:len(spec.get('criteria') or ())] if spec['type'] == 'choice' else ())

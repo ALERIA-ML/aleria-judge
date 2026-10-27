@@ -101,3 +101,33 @@ def test_host_kv_tier_is_explicit_and_never_degenerate():
     for bad in (0.1, -1):  # a few blocks (the stalling one-block case) or TensorRT-LLM's auto sizing
         with pytest.raises(ValueError, match='host_kv_cache_gb'):
             Settings(host_kv_cache_gb=bad)
+
+
+def test_vision_engine_setting():
+    assert Settings().vision_engine == 'aitune'
+    assert Settings.from_env({'JUDGE_VISION_ENGINE': 'eager'}).vision_engine == 'eager'
+    with pytest.raises(ValueError, match="vision_engine must be 'aitune' or 'eager'"):
+        Settings(vision_engine='tensorrt')
+    assert differences(Settings(vision_engine='eager')) == {}  # 'eager' reproduces 1.1.2's embeddings exactly
+
+
+def test_lean_precision_setting():
+    assert Settings().lean_precision == 'bf16'
+    assert Settings.from_env({'JUDGE_LEAN_PRECISION': 'fp8'}).lean_precision == 'fp8'
+    with pytest.raises(ValueError, match="lean_precision must be 'bf16' or 'fp8'"):
+        Settings(lean_precision='int8')
+    with pytest.raises(ValueError, match="lean_precision 'fp8' needs engine 'lean'"):
+        Settings(engine='trt', lean_precision='fp8')
+    assert differences(Settings(lean_precision='fp8')) == {'lean_precision': ['fp8', 'bf16']}  # not the evaluated run
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    assert 'JUDGE_LEAN_PRECISION: ${LEAN_PRECISION:-bf16}' in (root / 'docker-compose.yml').read_text()
+    assert '| `LEAN_PRECISION` | `bf16` |' in (root / 'docs' / 'deploy.md').read_text()
+
+
+def test_compose_passes_every_documented_vision_setting():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    compose = (root / 'docker-compose.yml').read_text()
+    assert 'JUDGE_VISION_ENGINE: ${VISION_ENGINE:-aitune}' in compose
+    assert '| `VISION_ENGINE` | `aitune` |' in (root / 'docs' / 'deploy.md').read_text()

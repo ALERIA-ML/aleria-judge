@@ -17,7 +17,7 @@ from .method import profile
 # tokens per image (the largest budget) the vision encoder needs the headroom (0.8 ran out of memory in the encoder on an H100 80 GB);
 # text only (vision false) can use 0.8.
 EVALUATED = {'checkpoint': 'bf16', 'default_effort': 'xhigh', 'vision': True, 'image_soft_tokens': SOFT_TOKENS,
-             'context_length': 65536, 'branch_slots': 32, 'prefill_tokens': 2048, 'cache_fraction': 0.7}
+             'lean_precision': 'bf16', 'context_length': 65536, 'branch_slots': 32, 'prefill_tokens': 2048, 'cache_fraction': 0.7}
 # Tokens per branch when context_length is 0, by engine. Lean: 131,072, run on an H100 80 GB with every long request of
 # the index (up to ~97k tokens with the question list) and synthetic 127k-token states answered. TensorRT-LLM keeps the
 # evaluated 65,536: its KV cache must hold a whole branch at startup, and the NVFP4 path has not run longer branches.
@@ -61,6 +61,13 @@ class Settings:
     vision: bool = True
     image_soft_tokens: int = SOFT_TOKENS  # Gemma 4 vision tokens per image: 70, 140, 280 (checkpoint default), 560 (default) or 1120
     vision_encoder_batch: int = 2     # images per vision-tower call (bounds encoder memory; same embeddings)
+    # lean engine's vision encoder layers: 'aitune' (a Torch-TensorRT engine built by NVIDIA AITune on the first start
+    # and kept in the cache directory) or 'eager' (PyTorch; the same embeddings as 1.1.2 bit for bit)
+    vision_engine: str = 'aitune'
+    # lean engine's layer projections: 'bf16' (the evaluated precision) or 'fp8' (quantized at load from the BF16
+    # checkpoint, one scale per output channel, activations per token at run time). xhigh in FP8: 64.53 against 64.73 on
+    # the Decision Index 0.3 public part, 98.9% of decisions equal, p80 latency -26% on an H100 (README)
+    lean_precision: str = 'bf16'
     # TensorRT-LLM's host KV tier, in GB of pinned host RAM: 0 (default, no tier) or at least 0.5. Never TensorRT-LLM's
     # auto sizing: under a container's default RLIMIT_MEMLOCK (64 KB) it builds a one-block tier on which the V2 KV
     # manager can stop making progress (docs/tensorrt-llm-patch.md). This service never used a tier in testing (no suspensions).
@@ -109,6 +116,9 @@ class Settings:
             'host_kv_cache_gb must be 0 (no host KV tier) or at least 0.5': self.host_kv_cache_gb == 0 or self.host_kv_cache_gb >= 0.5,
             'image_soft_tokens must be one of 70, 140, 280, 560, 1120': self.image_soft_tokens in (70, 140, 280, 560, 1120),
             'vision_encoder_batch must be at least 1': self.vision_encoder_batch >= 1,
+            "vision_engine must be 'aitune' or 'eager'": self.vision_engine in ('aitune', 'eager'),
+            "lean_precision must be 'bf16' or 'fp8'": self.lean_precision in ('bf16', 'fp8'),
+            "lean_precision 'fp8' needs engine 'lean'": self.lean_precision == 'bf16' or self.engine == 'lean',
             'cache_fraction must be in (0, 1)': 0 < self.cache_fraction < 1,
             'drain_timeout >= 0 and retry_after >= 1': self.drain_timeout >= 0 and self.retry_after >= 1,
             f'nvfp4_backends must be a comma-separated subset of {",".join(NVFP4_BACKENDS)}':

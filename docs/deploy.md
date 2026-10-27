@@ -33,7 +33,10 @@ That is the whole setup. On the first start the log shows, in order:
 3. `serving … default effort xhigh`: the tokenizer overlay with Google's canonical chat template
    is assembled and checked. Then `trtllm_patches_installed` and `kv_pool` events: 3–4 minutes for
    bf16 on a first start, longer for nvfp4 (GEMM autotuning).
-4. `ready. Playground: http://localhost:30104/`.
+4. With images (the default), `{"event": "vision_engine", "engine": "aitune", ..., "built_s": ...}`: NVIDIA AITune
+   builds the vision tower's TensorRT engine for this GPU and image budget (about 1.5 min on an H100) into
+   `vision-engine/` in the cache directory; later starts load it (`"load_s"`, seconds).
+5. `ready. Playground: http://localhost:30104/`.
 
 Keep the server detached (`-d`) and follow its log with `docker compose logs -f`, which you can stop and
 start again at any time. The server writes one log line per request to stdout, and an attached
@@ -42,7 +45,8 @@ writes: requests then wait until the terminal reads again. Stop it with `docker 
 
 The service fails fast instead of starting degraded. It stops when no GPU is visible, the GPU has
 no FP4 tensor cores (unless `NVFP4_BACKENDS=marlin`), the checkpoint or tokenizer files differ from
-the pinned ones, or the KV cache cannot hold one branch of `CONTEXT_LENGTH` tokens.
+the pinned ones, the KV cache cannot hold one branch of `CONTEXT_LENGTH` tokens, or the vision engine cannot be
+built or loaded (the error says why; `VISION_ENGINE=eager` serves images without it).
 
 ## Settings
 
@@ -59,10 +63,12 @@ Every setting has a default. Pass overrides in the shell, for example
 | `HF_CACHE` | `~/.cache/huggingface` | Hugging Face cache that receives the download |
 | `CHECKPOINT` | `bf16` | `bf16` (google/gemma-4-31B-it) or `nvfp4` (nvidia/Gemma-4-31B-IT-NVFP4, Blackwell) |
 | `DEFAULT_EFFORT` | `xhigh` | Effort profile of requests that name none (`low`, `medium`, `high` or `xhigh`); the official kit names none |
-| `CACHE_DIR` | `~/.cache/aleria-judge` | Compilation caches (one subfolder per checkpoint), the tokenizer overlay and temporary files |
+| `CACHE_DIR` | `~/.cache/aleria-judge` | Compilation caches (one subfolder per checkpoint), the vision engine (about 1.5 GB per GPU model and image budget), the tokenizer overlay and temporary files |
 | `HF_TOKEN` | empty | Not needed for these Apache-2.0 checkpoints; a saved `hf auth login` token is also used |
 | `VISION` | `true` | Load Gemma 4's vision tower and accept `images`; `false` serves text only (required for `nvfp4`) |
 | `IMAGE_SOFT_TOKENS` | `560` | Vision tokens per image: 70, 140, 280 (the checkpoint's own default), 560 (the Decision Index vision board's budget for Gemma 4) or 1120 (native). TensorRT-LLM reads the budget only from the checkpoint's `processor_config.json`, so startup builds a symlinked copy of the checkpoint with that file edited (`checkpoint/image560` in the cache directory; no weights are copied) and refuses to start if the engine's budget differs |
+| `VISION_ENGINE` | `aitune` | Lean engine: the vision tower's layers as a TensorRT engine built by NVIDIA AITune (Torch-TensorRT, BF16) on the first start for this GPU, driver, software versions, checkpoint and `IMAGE_SOFT_TOKENS`, kept in `CACHE_DIR` and loaded on later starts; or `eager` (PyTorch, image embeddings exactly as 1.1.2). A failed build or load stops the service |
+| `LEAN_PRECISION` | `bf16` | Lean engine: the layer projections (q/k/v/o, gate/up/down) in BF16, or `fp8`: quantized at load from the BF16 checkpoint with one scale per output channel and activations quantized per token, while embeddings, the LM head, norms, attention K/V and the vision tower stay BF16. FP8 needs a GPU with FP8 tensor cores (Hopper, Ada, Blackwell). Measured with `xhigh` on the Decision Index 0.3 public part (H100 PCIe 80 GB, one request at a time per GPU): 64.53 against 64.73 for BF16, 98.9% of decisions equal, p50 / p80 / mean 91 / 367 / 286 ms against 111 / 494 / 369 ms. Reported under `differs_from_evaluated` |
 | `CONTEXT_LENGTH` | `0` | Tokens per branch; `0` is the engine's default: 131,072 for `lean`, 65,536 for `trt`. A longer question is refused with 422, never truncated. Lower it to need less KV cache |
 | `CACHE_FRACTION` | `0.7` | Share of free GPU memory for the KV cache. 0.7 leaves the vision encoder its headroom at 1,120 tokens per image; text only (`VISION=false`) can use 0.8 |
 | `BRANCH_SLOTS` | `32` | Branches TensorRT-LLM runs at once |

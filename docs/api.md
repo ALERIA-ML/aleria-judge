@@ -68,8 +68,8 @@ a question whose prompt would exceed the branch limit (`CONTEXT_LENGTH`: 131,072
 ### Images
 
 An optional `images` list carries base64 data URLs (PNG, JPEG, WebP or GIF; at most 8 per request, 5 MB
-each); remote URLs are never fetched. The images come before the state in every prompt, are encoded once per
-request and their key-value blocks are reused by every branch. Each image costs 562 prompt tokens (560
+each); remote URLs are never fetched. In every prompt the images follow the list of the request's questions and come
+before the state; they are encoded once per request and their key-value blocks are reused by every branch. Each image costs 562 prompt tokens (560
 vision tokens by default; `IMAGE_SOFT_TOKENS`). With two or more images each is introduced as `Image k:`, so questions
 can refer to images by number; a single image is a bare placeholder. A malformed image is a 422, and so is any
 image when the service runs text only (`VISION=false`, required for the NVFP4 checkpoint).

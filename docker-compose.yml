@@ -11,6 +11,14 @@
 #   CHECKPOINT=bf16   google/gemma-4-31B-it, BF16, about 62 GB (default; any GPU with 80 GB+)
 #   CHECKPOINT=nvfp4  nvidia/Gemma-4-31B-IT-NVFP4, about 33 GB (Blackwell); needs ENGINE=trt and VISION=false
 #
+#   VISION_ENGINE=aitune  the lean engine's vision encoder as a TensorRT engine built by NVIDIA AITune (default):
+#                         ~1.5 min more on the first start per GPU and image budget, kept in CACHE_DIR
+#   VISION_ENGINE=eager   the encoder in PyTorch: image embeddings exactly as 1.1.2, no build
+#
+#   LEAN_PRECISION=bf16   the lean engine's layer projections in BF16 (default, the evaluated precision)
+#   LEAN_PRECISION=fp8    quantized to FP8 at load (one scale per output channel, activations per token): about 31 GB
+#                         less weight memory, p80 latency -26% on an H100, Decision Index 0.3 public 64.53 vs 64.73
+#
 # Requests pick their effort (low, medium, high, xhigh) with the X-Decision-Effort header or
 # options.effort; DEFAULT_EFFORT applies when they name none (xhigh).
 #
@@ -22,7 +30,7 @@ name: aleria-judge
 services:
   server:
     build: .
-    image: aleria-judge:1.1.2
+    image: aleria-judge:1.1.3
     init: true
     read_only: true
     network_mode: host
@@ -39,6 +47,8 @@ services:
       JUDGE_PORT: ${PORT:-30104}
       JUDGE_VISION: ${VISION:-true}        # false: text only
       JUDGE_IMAGE_SOFT_TOKENS: ${IMAGE_SOFT_TOKENS:-560} # per image: 70, 140, 280, 560 (vision board) or 1120 (native)
+      JUDGE_VISION_ENGINE: ${VISION_ENGINE:-aitune} # lean: aitune (TensorRT engine, built once into CACHE_DIR) or eager
+      JUDGE_LEAN_PRECISION: ${LEAN_PRECISION:-bf16} # lean: bf16 (evaluated) or fp8 (layer projections quantized at load)
       JUDGE_CONTEXT_LENGTH: ${CONTEXT_LENGTH:-0}       # tokens per branch (0: 131072 lean, 65536 trt); longer prompts are refused
       JUDGE_CACHE_FRACTION: ${CACHE_FRACTION:-0.7}     # trt: KV cache share of free GPU memory (text only can use 0.8)
       JUDGE_BRANCH_SLOTS: ${BRANCH_SLOTS:-32}          # trt: branches run at once

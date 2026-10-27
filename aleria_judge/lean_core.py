@@ -29,6 +29,12 @@ import triton.language as tl
 # Test only (JUDGE_LEAN_POISON=1): fill every new K/V pool with NaN instead of leaving freed memory in it, so a read of
 # a slot no pass wrote (which could hold another request's K/V) shows up as NaN probabilities.
 POISON = os.environ.get('JUDGE_LEAN_POISON') == '1'
+# LeanGemma4(precision=...) sets the projection weights of every layer (q/k/v/o, gate/up/down): 'bf16' (the evaluated
+# precision) or 'fp8': quantized at load from the BF16 checkpoint with one float32 scale per output channel (channel
+# amax / 448), activations quantized per token at run time. Per-token scales keep a token's result independent of the
+# other tokens in the forward (other branches, passes, steps). Embeddings, the LM head rows, norms, attention (BF16 K/V)
+# and the vision tower stay BF16.
+FP8_MAX = 448.0
 
 
 class Tree:
@@ -320,6 +326,54 @@ def _mlp_epilogue(d, x, h_out, w_post, scale, w_next, H, eps, HAS_NEXT: tl.const
         tl.store(h_out + row * H + offs, hv.to(tl.bfloat16), mask=m)
 
 
+@triton.jit
+def _quant_rows(x, q, s, K, stride, BLOCK: tl.constexpr):
+    """Per row: scale = max |x| / 448 (at least 1e-12), q = x / scale as float8_e4m3fn."""
+    row = tl.program_id(0).to(tl.int64)
+    acc = tl.zeros((BLOCK,), tl.float32)
+    for k in range(0, K, BLOCK):
+        offs = k + tl.arange(0, BLOCK)
+        acc = tl.maximum(acc, tl.abs(tl.load(x + row * stride + offs, mask=offs < K, other=0.).to(tl.float32)))
+    scale = tl.maximum(tl.max(acc, 0) / 448.0, 1e-12)
+    tl.store(s + row, scale)
+    for k in range(0, K, BLOCK):
+        offs = k + tl.arange(0, BLOCK)
+        v = tl.load(x + row * stride + offs, mask=offs < K, other=0.).to(tl.float32) / scale
+        tl.store(q + row * K + offs, tl.minimum(tl.maximum(v, -448.0), 448.0).to(tl.float8e4nv), mask=offs < K)
+
+
+class Fp8:
+    """A linear weight [out, in] as float8_e4m3fn with one float32 scale per output channel."""
+
+    def __init__(self, q, scale):
+        self.q, self.scale, self.shape = q, scale, q.shape
+
+    @classmethod
+    def quantize(cls, w):
+        """As quantization_methods/fp8_per_channel.quantize_weight: per row of a fused weight, which equals quantizing
+        each of its parts (q, k, v; gate, up) on its own."""
+        wf = w.float()
+        scale = (wf.abs().amax(dim=1) / FP8_MAX).clamp(min=1e-12)
+        q = (wf / scale[:, None]).clamp(-FP8_MAX, FP8_MAX).to(torch.float8_e4m3fn)
+        return cls(q.contiguous(), scale.contiguous())
+
+    def __getitem__(self, rows):
+        """A slice of the output channels."""
+        return Fp8(self.q[rows], self.scale[rows])
+
+
+def mm(x, w):
+    """x @ w.T in BF16; for an Fp8 weight, x quantized per row and one row-wise scaled FP8 GEMM with BF16 output."""
+    if not isinstance(w, Fp8):
+        return x @ w.T
+    n, k = x.shape
+    xq = torch.empty(n, k, dtype=torch.float8_e4m3fn, device=x.device)
+    sx = torch.empty(n, 1, dtype=torch.float32, device=x.device)
+    if n:
+        _quant_rows[(n,)](x, xq, sx, k, x.stride(0), 1024, num_warps=4)
+    return torch._scaled_mm(xq, w.q.t(), scale_a=sx, scale_b=w.scale.view(1, -1), out_dtype=torch.bfloat16)
+
+
 class Request:
     """One request's tree, label IDs, computed nodes and (with `retain`) its K/V pools."""
 
@@ -338,7 +392,7 @@ class Request:
 
 class LeanGemma4:
     def __init__(self, model_dir, device='cuda', workspace_mb=512, retain_budget_gb=10.0, single_max=16384,
-                 step_tokens=8192):
+                 step_tokens=8192, precision='bf16'):
         import flashinfer
         from safetensors import safe_open
         self.fi = flashinfer
@@ -356,6 +410,8 @@ class LeanGemma4:
                      'full_attention': (cfg['num_global_key_value_heads'], cfg['global_head_dim'])}
         assert cfg['attention_k_eq_v'] and not cfg['enable_moe_block'] and not cfg['hidden_size_per_layer_input']
         assert cfg['num_kv_shared_layers'] == 0 and cfg['tie_word_embeddings']
+        assert precision in ('bf16', 'fp8'), f"precision must be 'bf16' or 'fp8', got {precision!r}"
+        self.precision = precision
         self.device = device
         index = json.load(open(f'{model_dir}/model.safetensors.index.json'))['weight_map']
         handles = {f: safe_open(f'{model_dir}/{f}', 'pt', device=device) for f in sorted(set(index.values()))}
@@ -374,8 +430,11 @@ class LeanGemma4:
             qkv = torch.cat(parts, 0)
             del parts
             gu = torch.cat([get(p + 'mlp.gate_proj.weight'), get(p + 'mlp.up_proj.weight')], 0)
+            o, down = get(a + 'o_proj.weight'), get(p + 'mlp.down_proj.weight')
+            if self.precision == 'fp8':
+                qkv, o, gu, down = [Fp8.quantize(w) for w in (qkv, o, gu, down)]
             self.layers.append(dict(
-                kind=kind, qkv=qkv, o=get(a + 'o_proj.weight'), gu=gu, down=get(p + 'mlp.down_proj.weight'),
+                kind=kind, qkv=qkv, o=o, gu=gu, down=down,
                 q_norm=get(a + 'q_norm.weight'), k_norm=get(a + 'k_norm.weight'),
                 in_ln=get(p + 'input_layernorm.weight'), post_attn=get(p + 'post_attention_layernorm.weight'),
                 pre_ff=get(p + 'pre_feedforward_layernorm.weight'), post_ff=get(p + 'post_feedforward_layernorm.weight'),
@@ -414,6 +473,8 @@ class LeanGemma4:
         hd = max(d for _, d in self.geom.values())
         self.act_bytes = 2 * (4 * self.hidden + max(self.layers[0]['qkv'].shape[0], self.layers[5]['qkv'].shape[0])
                               + 2 * self.hq * hd + 3 * self.layers[0]['gu'].shape[0] // 2)
+        if self.precision == 'fp8':  # the FP8 copy of the widest GEMM input (the down projection's) and its scale
+            self.act_bytes += self.layers[0]['down'].shape[1] + 4
 
     # ---- requests -------------------------------------------------------------------------------------------------
     def set_shared_prefix(self, tokens):
@@ -667,7 +728,7 @@ class LeanGemma4:
             has_v = int(kind == 'sliding_attention')
             if i == last and self.prune_last:
                 return self._last_layer(st, layer, hn, x, rows, k_pool, v_pool, slots[kk], cos, sin, hk, d, has_v, bh)
-            qkv = hn @ layer['qkv'].T
+            qkv = mm(hn, layer['qkv'])
             q = torch.empty(n, self.hq, d, dtype=torch.bfloat16, device=self.device)
             _qkv_post[(n, triton.cdiv(self.hq + 2 * hk, bh))](
                 qkv, q, k_pool, v_pool, slots[kk], layer['q_norm'], layer['k_norm'], cos, sin, qkv.stride(0),
@@ -679,11 +740,11 @@ class LeanGemma4:
                     self.wrappers[kind].run(q[rows_b:], (k_pool, v_pool), out=attn[rows_b:])
             else:
                 attn = self.wrappers[kind].run(q, (k_pool, v_pool))
-            o = attn.reshape(n, self.hq * d) @ layer['o'].T
+            o = mm(attn.reshape(n, self.hq * d), layer['o'])
             h2 = torch.empty_like(x)
             _attn_epilogue[(n,)](o, x, h2, layer['post_attn'], layer['pre_ff'], H, eps, HB, num_warps=8)
-            a = self.fi.activation.gelu_tanh_and_mul(h2 @ layer['gu'].T)
-            dn = a @ layer['down'].T
+            a = self.fi.activation.gelu_tanh_and_mul(mm(h2, layer['gu']))
+            dn = mm(a, layer['down'])
             nxt = self.layers[i + 1]['in_ln'] if i < last else layer['in_ln']
             hn = torch.empty_like(x)
             _mlp_epilogue[(n,)](dn, x, hn, layer['post_ff'], layer['scalar'], nxt, H, eps, int(i < last), HB, num_warps=8)
@@ -698,14 +759,14 @@ class LeanGemma4:
         for the readout rows only, each attending over its own path."""
         n, H, eps = len(st['tokens']), self.hidden, self.eps
         qd = self.hq * d
-        kv = hn @ layer['qkv'][qd:].T
+        kv = mm(hn, layer['qkv'][qd:])
         _qkv_post[(n, triton.cdiv(2 * hk, bh))](
             kv, kv, k_pool, v_pool, slots, layer['q_norm'], layer['k_norm'], cos, sin, kv.stride(0),
             0, hk, has_v, d, d // 2, bh, eps)
         if not rows:
             return {}
         r = torch.as_tensor(rows, device=self.device)
-        q_lin = hn[r] @ layer['qkv'][:qd].T
+        q_lin = mm(hn[r], layer['qkv'][:qd])
         q = torch.empty(len(rows), self.hq, d, dtype=torch.bfloat16, device=self.device)
         _qkv_post[(len(rows), triton.cdiv(self.hq, bh))](
             q_lin, q, k_pool, v_pool, torch.zeros(len(rows), dtype=torch.int32, device=self.device), layer['q_norm'],
@@ -726,11 +787,11 @@ class LeanGemma4:
                                window_left=self.window - 1 if has_v else -1,
                                q_data_type=torch.bfloat16, kv_data_type=torch.bfloat16)
         attn = self.last_wrapper.run(q, (k_pool, v_pool))
-        o = attn.reshape(len(rows), qd) @ layer['o'].T
+        o = mm(attn.reshape(len(rows), qd), layer['o'])
         xr = x[r].contiguous()
         h2 = torch.empty_like(xr)
         _attn_epilogue[(len(rows),)](o, xr, h2, layer['post_attn'], layer['pre_ff'], H, eps, self.H_BLOCK, num_warps=8)
-        dn = self.fi.activation.gelu_tanh_and_mul(h2 @ layer['gu'].T) @ layer['down'].T
+        dn = mm(self.fi.activation.gelu_tanh_and_mul(mm(h2, layer['gu'])), layer['down'])
         _mlp_epilogue[(len(rows),)](dn, xr, xr, layer['post_ff'], layer['scalar'], layer['in_ln'], H, eps, 0,
                                     self.H_BLOCK, num_warps=8)
         normed = self.fi.rmsnorm(xr, self.norm, eps)
@@ -742,12 +803,38 @@ class LeanGemma4:
         return self.run(req, list(range(len(tree.seqs))))
 
 
-class VisionEncoder:
-    """Gemma 4's image path from transformers: the image processor (soft-token budget from the checkpoint's
-    processor_config.json unless given), the vision tower and the multimodal embedder, BF16 on one GPU. `encode` returns
-    one tensor (soft tokens x LM hidden) per image; the processor fixes each image's soft-token count."""
+def encoder_layers(encoder):
+    """The vision tower's encoder layers on one image's real patches as a module: hidden [1, n, H], positions
+    [1, n, 2] -> hidden. Without padding patches there is no attention mask. This is the module `vision_tune` hands to
+    AITune. (Defined on use, so lean_core imports without torch.nn, as the CPU tree check needs.)"""
 
-    def __init__(self, model_dir, device='cuda', batch=2):
+    class EncoderLayers(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.encoder = encoder
+
+        def forward(self, hidden, positions):
+            cos, sin = self.encoder.rotary_emb(hidden, positions)
+            for layer in self.encoder.layers[:self.encoder.config.num_hidden_layers]:
+                hidden = layer(hidden, attention_mask=None, position_embeddings=(cos, sin), position_ids=positions)
+            return hidden
+
+    return EncoderLayers().eval()
+
+
+class VisionEncoder:
+    """Gemma 4's image path: transformers' image processor (soft-token budget from the checkpoint's
+    processor_config.json unless given), the vision tower and the multimodal embedder, BF16 on one GPU. `encode` returns
+    one tensor (soft tokens x LM hidden) per image; the processor fixes each image's soft-token count.
+
+    The tower runs each image on its real patches only: the processor pads every image to the budget's patch count
+    with (-1, -1) positions after the real ones, which transformers' tower masks out at the cost of attention over the
+    padding. The patch position embedding is a row lookup instead of transformers' one-hot matmul over 10,240 classes.
+    Both give the same embeddings bit for bit. `engine`: 'eager' runs the encoder layers in PyTorch; 'aitune' runs them
+    as the AITune-tuned (Torch-TensorRT) module `vision_tune` builds into the cache directory on a first start and loads
+    on later ones."""
+
+    def __init__(self, model_dir, device='cuda', batch=2, soft_tokens=None, engine='eager'):
         from safetensors import safe_open
         from transformers import AutoConfig, AutoProcessor
         from transformers.models.gemma4 import modeling_gemma4 as mg
@@ -766,16 +853,45 @@ class VisionEncoder:
             if missing or unexpected:
                 raise ValueError(f'{prefix}: missing {missing[:3]}, unexpected {unexpected[:3]}')
         self.tower, self.embedder = self.tower.to(device).eval(), self.embedder.to(device).eval()
-        self.device, self.batch = device, batch
+        self.device, self.batch = device, batch  # batch: kept for the engine's signature; images run one at a time
+        self.k = cfg.vision_config.pooling_kernel_size
+        self.soft_tokens = soft_tokens or self.processor.max_soft_tokens
+        self.engine, self.engine_info = engine, {'engine': engine}
+        self.layers = encoder_layers(self.tower.encoder)
+        if engine == 'aitune':
+            from .vision_tune import tuned_layers
+            self.layers, self.engine_info = tuned_layers(self.layers, model_dir, self.soft_tokens * self.k ** 2, device)
+        elif engine != 'eager':
+            raise ValueError(f"vision engine must be 'eager' or 'aitune', got {engine!r}")
+
+    def _patches(self, image, soft):
+        """One RGB PIL image -> (pixels [n, 3 * patch^2], positions [n, 2]) on the GPU, the real patches only."""
+        p = self.processor([image], return_tensors='pt', max_soft_tokens=soft)
+        n = int(p['num_soft_tokens_per_image'][0]) * self.k ** 2
+        return (p['pixel_values'][0, :n].to(self.device, torch.bfloat16, non_blocking=True),
+                p['image_position_ids'][0, :n].to(self.device, non_blocking=True))
+
+    def _tower(self, pixels, positions):
+        """One image's real patches -> its soft tokens [n / k^2, vision hidden], as Gemma4VisionModel.forward computes
+        them for the padded batch."""
+        tower = self.tower
+        pixels, positions = pixels[None], positions[None]
+        table = tower.patch_embedder.position_embedding_table
+        hidden = tower.patch_embedder.input_proj(2 * (pixels - 0.5))
+        hidden = hidden + (table[0][positions[..., 0]] + table[1][positions[..., 1]])
+        hidden = self.layers(hidden, positions)
+        padding = torch.zeros(positions.shape[:2], dtype=torch.bool, device=positions.device)
+        hidden, mask = tower.pooler(hidden_states=hidden, pixel_position_ids=positions, padding_positions=padding,
+                                    output_length=positions.shape[1] // self.k ** 2)
+        hidden = hidden[mask]
+        if tower.config.standardize:
+            hidden = (hidden - tower.std_bias) * tower.std_scale
+        return hidden
 
     @torch.inference_mode()
     def encode(self, images, soft_tokens=None):
-        out = []
-        kw = {'max_soft_tokens': soft_tokens} if soft_tokens else {}
-        for i in range(0, len(images), self.batch):  # a few images per tower call bounds its memory
-            p = self.processor(list(images[i:i + self.batch]), return_tensors='pt', **kw)
-            h = self.tower(pixel_values=p['pixel_values'].to(self.device, torch.bfloat16),
-                           pixel_position_ids=p['image_position_ids'].to(self.device)).last_hidden_state
-            f = self.embedder(inputs_embeds=h)
-            out += list(torch.split(f.reshape(-1, f.shape[-1]), p['num_soft_tokens_per_image'].tolist()))
-        return out
+        soft = soft_tokens or self.soft_tokens
+        if soft * self.k ** 2 > self.engine_info.get('max_patches', soft * self.k ** 2):
+            raise ValueError(f'{soft} soft tokens per image exceed the vision engine built for '
+                             f'{self.engine_info["max_patches"] // self.k ** 2}')
+        return [self.embedder(inputs_embeds=self._tower(*self._patches(image, soft))) for image in images]

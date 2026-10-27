@@ -182,6 +182,52 @@ within 65,536 tokens get identical answers at the higher limit (200 requests). A
 works and 192,000 tokens or more return 413 on that card. 1.1.1 therefore defaults to 131,072 tokens per branch on the
 lean engine; TensorRT-LLM keeps 65,536, as evaluated.
 
+### Release 1.1.3
+
+Release 1.1.3 keeps 1.1.2's method and text path; for images it changes where they sit in the prompt and how the lean
+engine runs the vision tower:
+
+- **Images after the question list.** An image request now writes the list of its questions and `Context:` first,
+  then the images (`Image k:` labels kept for two or more), then the state, so the image tokens are computed after
+  the questions they will answer; before, the images opened the user turn. Text-only prompts are encoded exactly as
+  before. On the full public vision suite (kit f8552a1, 12,210 rows; 23node GPUs 1-3, H100 PCIe 80 GB; the AITune
+  build with the same engines and shards, so rows pair exactly) it scored 74.86 against 73.90: +0.96, paired
+  bootstrap 95% interval +0.19 to +1.77; 349 rows gained, 271 lost. BLINK +27 net (relative depth 88.7 -> 93.5,
+  spatial relation 90.2 -> 93.0, counting 75.0 -> 79.2), CV-Bench +21, MMMU-Pro +13, RealWorldQA +12; no benchmark
+  is down more than 4 rows net. Request time 212 / 290 / 543 / 261 ms (median / p80 / p95 / mean) against 209 / 289 / 542 /
+  259. Found by comparing our vision run with jev-brain's (decision-index PR 316), which writes the questions
+  before the images; answering images in one candidate order instead, the other difference, scored 73.02 against
+  73.75 for 1.1.2 and is not adopted.
+
+- **Real patches only.** The image processor pads every image to the budget's patch count (5,040 at 560 soft tokens)
+  with padding patches after the real ones; the tower now runs each image on its real patches (4,599-4,995 at 560
+  for every image of the latency set), so attention needs no mask. The patch position embedding becomes a row lookup
+  instead of a one-hot matmul over 10,240 classes. Both give the same embeddings as 1.1.2 bit for bit (300 / 300
+  vision requests with identical answers), and the encoder's peak memory drops from 3.1 to 1.3 GiB.
+- **AITune engine** (`VISION_ENGINE=aitune`, the default). NVIDIA AITune 0.6.0 tunes the 27 encoder layers with its
+  Torch-TensorRT backend (BF16, one optimization profile over 9 to 9 x budget patches) on the first start and saves
+  the engine in the cache directory, keyed by GPU, driver, software versions, checkpoint and budget; later starts load
+  it. The engine's embeddings differ from PyTorch's at rounding level, which the tower amplifies (BF16 against FP32
+  arithmetic moves its output by a median relative 9%), so a few close decisions flip. `VISION_ENGINE=eager` runs
+  the layers in PyTorch and reproduces 1.1.2 exactly. A failed build or load stops the service.
+
+Measured on 23node, H100 PCIe 80 GB, every other setting the default (effort `xhigh`, 560 soft tokens): the 300 vision
+requests of our latency set, one at a time through the HTTP API, client ms median / p80 / p95 / mean:
+
+| Vision path | Latency | Decisions equal to 1.1.2 |
+| --- | --- | --- |
+| 1.1.2 | 224.0 / 290.7 / 437.4 / 257.7 | — |
+| real patches only (`VISION_ENGINE=eager`) | 204.6 / 272.6 / 392.7 / 235.9 | 300 / 300 (identical answers) |
+| real patches + Torch-TensorRT encoder | 183.2 / 240.5 / 348.9 / 211.6 | 289 / 300 |
+
+The Torch-TensorRT row is the prototype that preceded AITune (the same backend, built directly); the AITune build of
+1.1.3 itself, and its public vision index, are pending. For the encoder alone, the AITune Torch-TensorRT engine took
+41.5 ms per request against 42.7 ms for torch.compile and 61.0 ms for PyTorch; its TensorRT-via-ONNX and Inductor
+backends were slower (44.1 and 43.5 ms). A full public vision run of a close variant (preprocessing on the GPU, real
+patches, the encoder through torch.compile) scored 74.29 against 73.75 for 1.1.2 (H100), with no benchmark down 0.3
+points or more. Building the engine took 76 s inside AITune's tuning on an H100 (the prototype: export 7 s, TensorRT
+build 51 s, save 15 s); a restart loads it in about 8-12 s.
+
 ### Order averaging on a fine-tuned model
 
 Position bias is not only a stock-model problem. On [Cloudflare/clef](https://huggingface.co/Cloudflare/clef)
@@ -252,9 +298,11 @@ activation, and a few small Triton kernels, BF16 on one GPU. Its numerics follow
   tokens.
 - **Readout.** The last layer runs its queries, attention and MLP only for the branch-final tokens, and the readout
   multiplies those rows by the label rows of the tied LM head only, with Gemma's final logit softcap.
-- **Images.** Gemma 4's vision tower (from transformers) encodes each image once per request, at most two per
-  tower call; the soft tokens sit in the shared prefix, so every branch and both passes reuse them. Image blocks
-  attend bidirectionally in sliding-window layers, as TensorRT-LLM's Gemma 4 does.
+- **Images.** Gemma 4's vision tower (weights and layers from transformers) encodes each image once per request,
+  on its real patches only (transformers pads every image to the budget's patch count and masks the padding), with
+  the patch position embedding as a row lookup; by default its 27 encoder layers run as a TensorRT engine built by
+  NVIDIA AITune ([release 1.1.3](#release-113)). The soft tokens sit in the shared prefix, so every branch and both
+  passes reuse them. Image blocks attend bidirectionally in sliding-window layers, as TensorRT-LLM's Gemma 4 does.
 - **Any request size.** Up to 16,384 tokens run in one forward; larger trees run in 8,192-token steps, halved until
   the K/V pools and activations fit. A pass that still does not fit drops other requests' kept K/V and retries
   without the gated orders; only a pass too large on its own is the request's HTTP 413, and the service keeps

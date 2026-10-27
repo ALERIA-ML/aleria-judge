@@ -32,21 +32,22 @@ class LeanEngine:
     needs_image_warmup = True
 
     def __init__(self, model, *, shared_prefix=(), retain_budget_gb=10.0, vision=False, image_soft_tokens=None,
-                 vision_batch=2):
+                 vision_batch=2, vision_engine='eager', precision='bf16'):
         self.worker = concurrent.futures.ThreadPoolExecutor(1, thread_name_prefix='lean')
-        self.model = self.worker.submit(LeanGemma4, model, retain_budget_gb=retain_budget_gb).result()
+        self.model = self.worker.submit(LeanGemma4, model, retain_budget_gb=retain_budget_gb, precision=precision).result()
         self.vision, self.image_soft_tokens = None, image_soft_tokens
         if vision:
-            # at most `vision_batch` images per tower call bounds the encoder's peak memory (as patches/vision.py does
-            # for TensorRT-LLM)
-            self.vision = self.worker.submit(VisionEncoder, model, batch=vision_batch).result()
+            # images run through the tower one at a time, on their real patches only (`vision_batch` is TensorRT-LLM's)
+            self.vision = self.worker.submit(VisionEncoder, model, batch=vision_batch, soft_tokens=image_soft_tokens,
+                                             engine=vision_engine).result()
+            print(json.dumps({'event': 'vision_engine', **self.vision.engine_info}), flush=True)
             self.model.free_bytes = torch.cuda.mem_get_info()[0] - (3 << 30)  # the tower and its buffers
         if shared_prefix:
             self.worker.submit(self.model.set_shared_prefix, list(shared_prefix)).result()
         self.requests = OrderedDict()  # salt -> (lean request, {branch key: sequence index})
         self.lock = threading.Lock()  # requests: the worker thread and release() on the event loop
         self.ended = OrderedDict()  # recently released salts: a pass still running for them must not keep K/V
-        print(json.dumps({'event': 'lean_engine', 'shared_prefix_tokens': len(shared_prefix),
+        print(json.dumps({'event': 'lean_engine', 'precision': precision, 'shared_prefix_tokens': len(shared_prefix),
                           'free_gib': round(self.model.free_bytes / 2**30, 1)}), flush=True)
 
     async def score_request(self, branches, images=(), salt=None, future=()):
