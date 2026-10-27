@@ -20,23 +20,26 @@ class Builder:
 
     def __init__(self):
         self.calls = []
+        self.twice = []  # read_twice of every call, in order
         self.tokenizer = SimpleNamespace(decode=lambda ids: ' '.join(map(str, ids)))
         self.chat = SimpleNamespace(head=[1])
         self.rating = SimpleNamespace(answer_tail=[9])
 
-    def prepare(self, state, questions, profile=HIGH, images=0, listed=None):
+    def prepare(self, state, questions, profile=HIGH, images=0, listed=None, read_twice=False):
         self.images = images
         self.listed = listed
-        return self._build(state, questions, False, profile, images)
+        return self._build(state, questions, False, profile, images, read_twice)
 
-    def extra(self, state, questions, images=0, listed=None):
+    def extra(self, state, questions, images=0, listed=None, read_twice=False):
         self.listed = listed
-        return self._build(state, questions, True, images=images)
+        return self._build(state, questions, True, images=images, read_twice=read_twice)
 
-    def _build(self, state, questions, gated, profile=HIGH, images=0):
+    def _build(self, state, questions, gated, profile=HIGH, images=0, read_twice=False):
         assert 1 <= len(questions) <= 128
         self.calls.append(len(questions))
-        if state == 'too long':
+        self.twice.append(read_twice)
+        # 'too long' never fits; 'fits once' fits only with the state written once
+        if state == 'too long' or (state == 'fits once' and read_twice):
             raise ValueError('Prompt exceeds context limit; no truncation')
         branches = []
         for key, spec in questions.items():

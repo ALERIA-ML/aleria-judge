@@ -30,7 +30,7 @@ That is the whole setup. On the first start the log shows, in order:
    revision 4135a98 …`): the checkpoint goes into
    `~/.cache/huggingface` in the standard Hugging Face cache layout. An interrupted download resumes,
    and a copy that other tools already put in that cache is reused.
-3. `serving … default effort high`: the tokenizer overlay with Google's canonical chat template
+3. `serving … default effort xhigh`: the tokenizer overlay with Google's canonical chat template
    is assembled and checked. Then `trtllm_patches_installed` and `kv_pool` events: 3–4 minutes for
    bf16 on a first start, longer for nvfp4 (GEMM autotuning).
 4. `ready. Playground: http://localhost:30104/`.
@@ -58,7 +58,7 @@ Every setting has a default. Pass overrides in the shell, for example
 | `MODEL_DIR` | — | Serve a checkpoint already on disk (a directory with `config.json` and the safetensors shards) |
 | `HF_CACHE` | `~/.cache/huggingface` | Hugging Face cache that receives the download |
 | `CHECKPOINT` | `bf16` | `bf16` (google/gemma-4-31B-it) or `nvfp4` (nvidia/Gemma-4-31B-IT-NVFP4, Blackwell) |
-| `DEFAULT_EFFORT` | `high` | Effort profile of requests that name none; the official kit names none |
+| `DEFAULT_EFFORT` | `xhigh` | Effort profile of requests that name none (`low`, `medium`, `high` or `xhigh`); the official kit names none |
 | `CACHE_DIR` | `~/.cache/aleria-judge` | Compilation caches (one subfolder per checkpoint), the tokenizer overlay and temporary files |
 | `HF_TOKEN` | empty | Not needed for these Apache-2.0 checkpoints; a saved `hf auth login` token is also used |
 | `VISION` | `true` | Load Gemma 4's vision tower and accept `images`; `false` serves text only (required for `nvfp4`) |

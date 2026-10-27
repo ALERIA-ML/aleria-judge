@@ -16,7 +16,7 @@ from .method import profile
 # below). cache_fraction 0.7: at 1,120 soft
 # tokens per image (the largest budget) the vision encoder needs the headroom (0.8 ran out of memory in the encoder on an H100 80 GB);
 # text only (vision false) can use 0.8.
-EVALUATED = {'checkpoint': 'bf16', 'default_effort': 'high', 'vision': True, 'image_soft_tokens': SOFT_TOKENS,
+EVALUATED = {'checkpoint': 'bf16', 'default_effort': 'xhigh', 'vision': True, 'image_soft_tokens': SOFT_TOKENS,
              'context_length': 65536, 'branch_slots': 32, 'prefill_tokens': 2048, 'cache_fraction': 0.7}
 # Tokens per branch when context_length is 0, by engine. Lean: 131,072, run on an H100 80 GB with every long request of
 # the index (up to ~97k tokens with the question list) and synthetic 127k-token states answered. TensorRT-LLM keeps the
@@ -52,7 +52,7 @@ class Settings:
     model_name: str = ''      # empty: the name the checkpoint was evaluated under (gemma-4-31b-trt / -nvfp4-trt)
     context_length: int = 0  # tokens per branch; 0: the engine's default (CONTEXT_LENGTH)
     # Method: the effort profile of requests that name none. The official kit names none.
-    default_effort: str = 'high'
+    default_effort: str = 'xhigh'
     # TensorRT-LLM capacity
     branch_slots: int = 32
     prefill_tokens: int = 2048
@@ -101,7 +101,7 @@ class Settings:
             "engine must be 'lean' or 'trt'": self.engine in ('trt', 'lean'),
             'cpu_threads must be positive': self.cpu_threads >= 1,
             'the lean engine serves the bf16 checkpoint': self.engine == 'trt' or self.checkpoint == 'bf16',
-            'default_effort must be low, medium or high': effort_ok,
+            'default_effort must be low, medium, high or xhigh': effort_ok,
             'capacity settings must be positive': min(self.branch_slots, self.prefill_tokens, self.max_body_bytes) >= 1
                                                   and self.max_requests >= 0 and self.max_queue >= 0,
             'timeouts must be positive': min(self.queue_timeout, self.request_timeout, self.keep_alive) > 0,

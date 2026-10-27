@@ -27,8 +27,8 @@ def test_metrics_count_outcomes_tokens_and_stages():
         assert sample(text, 'judge_kv_suspensions') == 0
         assert sample(text, 'judge_requests_total', '{status="422"}') == 2
         assert sample(text, 'judge_questions_total') == 1
-        assert sample(text, 'judge_branches_total') == 4
-        assert sample(text, 'judge_input_tokens_total') == 14
+        assert sample(text, 'judge_branches_total') == 2
+        assert sample(text, 'judge_input_tokens_total') == 6
         assert sample(text, 'judge_request_duration_seconds_count') == 3
         assert sample(text, 'judge_stage_duration_seconds_count', '{stage="inference"}') == 1
         assert sample(text, 'judge_ready') == 1 and sample(text, 'judge_failed') == 0
@@ -61,7 +61,7 @@ def test_one_structured_log_line_per_request():
     assert len(lines) == 1
     line = lines[0]
     assert line['request_id'] == 'trace-7' and line['status'] == 200 and line['questions'] == 1
-    assert line['branches'] == 4 and line['input_tokens'] == 14 and set(line['stages']) >= {'prepare', 'queue', 'inference'}
+    assert line['branches'] == 2 and line['input_tokens'] == 6 and set(line['stages']) >= {'prepare', 'queue', 'inference'}
 
 
 def test_access_log_can_be_disabled():

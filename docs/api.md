@@ -122,10 +122,11 @@ Each request can choose how many views of each question the engine scores:
 | --- | --- | --- |
 | `low` | one candidate order, T = 1 | 1.0 |
 | `medium` | two orders; nine-digit rating of every two-option question in both orders; option-count temperature on questions with three or more options | 3.34 |
-| `high` (default) | `medium` + two more orders where the first two disagree (three or more options) | 3.43 |
+| `high` | `medium` + two more orders where the first two disagree (three or more options) | 3.43 |
+| `xhigh` (default) | `high` without the rating; the state is written twice in the prompt, after "Read the same input again before answering:" (once when twice would not fit the context limit) | 2.08 |
 
 Branch counts are averages over the Decision Index. Choose the effort with a header or a field; a request
-with neither gets the service default (`DEFAULT_EFFORT`, `high` unless changed):
+with neither gets the service default (`DEFAULT_EFFORT`, `xhigh` unless changed):
 
 ```bash
 curl -fsS http://127.0.0.1:30104/v1/systemone -H 'content-type: application/json' -H 'X-Decision-Effort: low' -d '{"state": "The invoice was paid twice.", "questions": {"refund": {"type": "noul", "instructions": "Should we refund the duplicate payment?"}}}'

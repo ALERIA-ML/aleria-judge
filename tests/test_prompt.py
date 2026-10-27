@@ -127,6 +127,32 @@ def test_every_branch_lists_all_questions_of_the_request_before_the_state(tokeni
         'Questions that will be asked about the context:\n- Which?\n\nContext:\nClouds.')
 
 
+def test_read_twice_writes_the_state_again_in_the_shared_prefix(tokenizer):
+    from aleria_judge.prompt import READ_AGAIN, Builder
+    builder = Builder(tokenizer)
+    once = builder.prepare('Clouds.', QUESTIONS)
+    twice = builder.prepare('Clouds.', QUESTIONS, read_twice=True)
+    gated = builder.extra('Clouds.', {'three': QUESTIONS['three']}, listed=QUESTIONS, read_twice=True)
+    head = len(builder.chat.head)
+    shared = twice[0].input_ids[:sum(twice[0].segments[:3])]
+    assert tokenizer.decode(shared[head:]) == ('Questions that will be asked about the context:\n- Rain?\n- Better?\n'
+                                               '- Raining?\n- Which?\n\nContext:\nClouds.' + READ_AGAIN + 'Context:\nClouds.')
+    assert [(b.question, b.kind, b.order) for b in twice] == [(b.question, b.kind, b.order) for b in once]
+    for a, b in zip(once, twice):  # the same branches after a longer shared prefix
+        assert b.input_ids[sum(b.segments[:3]):] == a.input_ids[sum(a.segments[:3]):]
+        assert b.input_ids[:len(shared)] == shared and b.segments[3:] == a.segments[3:]
+    assert all(b.input_ids[:len(shared)] == shared for b in gated)
+
+
+def test_read_twice_hits_the_context_limit_where_reading_once_fits(tokenizer):
+    from aleria_judge.prompt import Builder
+    longest = max(len(b.input_ids) for b in Builder(tokenizer).prepare('Clouds over the hills.', QUESTIONS))
+    tight = Builder(tokenizer, context_length=longest + 1)
+    assert tight.prepare('Clouds over the hills.', QUESTIONS)
+    with pytest.raises(ValueError, match='context limit'):
+        tight.prepare('Clouds over the hills.', QUESTIONS, read_twice=True)
+
+
 def test_every_prompt_opens_with_the_system_turn(tokenizer):
     from aleria_judge.prompt import Builder
     from aleria_judge.vendor.prompt import SYSTEM_LINE

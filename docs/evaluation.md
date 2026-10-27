@@ -24,7 +24,7 @@ CPU-only Python 3.11+ environment for the kit, and time: a full run takes about 
 (NVFP4) on one RTX PRO 6000 and about 18 hours on one H100. Split the suite across GPUs to finish sooner
 ([step 3](#3-full-run)).
 
-**Effort.** The kit sends requests without `options`, so every request gets the service default, `high`:
+**Effort.** The kit sends requests without `options`, so every request gets the service default, `xhigh`:
 the evaluated method. `/health` shows `default_effort`, and every result row records `usage.effort`.
 
 ## 0. Install the kit and get the 0.3 suite
@@ -150,7 +150,7 @@ gated access.
 Then open a pull request to the kit adding a row to `submissions/README.md`: the model name, the model repo
 (`google/gemma-4-31B-it` @ `842da37`; NVIDIA's NVFP4 quantization of it serves text only), the results link
 (`runs/<name>/scores.json`), the kit commit and engine (`http` → this repository at its commit), the
-hardware, and the settings (`docker compose up -d`: `CHECKPOINT=bf16`, default effort `high`). After review, the
+hardware, and the settings (`docker compose up -d`: `CHECKPOINT=bf16`, default effort `xhigh`). After review, the
 maintainers start this service themselves, run the private parts of the Full score on it, compare answers on
 their own sample and measure latency on one RTX PRO 6000 with their own stratified sample, sent one request
 at a time after untimed warm-up rows. The run's own latency (`latency_ms` in `scores.json`) is only a guide:

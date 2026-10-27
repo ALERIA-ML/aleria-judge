@@ -21,12 +21,13 @@ Aleria Judge is built by [Aleria AI](https://aleria.ai). Aleria builds sovereign
 
 ## Results
 
-Aleria Judge 1.1.1 adds one change to 1.1.0: every prompt first lists all of the request's questions, so each question is answered knowing what else is asked ([release 1.1.1](docs/method.md#release-111)). Every run uses every default (BF16, effort `high`, 560 soft tokens per image), one request at a time through the HTTP API, the official [Decision Index](https://github.com/apolinario/decision-index) kit (edition 0.3) on the public part of each index, and one server per GPU. Each cell gives the score, then latency per request as median / p80 / mean:
+Aleria Judge 1.1.2 makes effort `xhigh` the default: every prompt reads the request's input twice, and two-option questions are no longer rated ([`xhigh`](docs/method.md#xhigh-the-input-read-twice)). 1.1.1 added the list of all the request's questions to every prompt ([release 1.1.1](docs/method.md#release-111)). Every run uses every default (BF16, the release's default effort, 560 soft tokens per image), one request at a time through the HTTP API, the official [Decision Index](https://github.com/apolinario/decision-index) kit (edition 0.3) on the public part of each index, and one server per GPU. Each cell gives the score, then latency per request as median / p80 / mean:
 
 | Aleria Judge | GPU | Decision Index 0.3 | Decision Index Vision 0.3 |
 | --- | --- | --- | --- |
-| 1.1.1 | H100 PCIe 80 GB | **63.43** · 104 / 387 / 319 ms | **74.06** · 245 / 310 / 296 ms |
-| 1.1.1 | RTX PRO 6000 Blackwell Server Edition | **63.46** · 119 / 403 / 320 ms | not run |
+| 1.1.2 | H100 PCIe 80 GB | **64.73** · 111 / 494 / 369 ms | not run |
+| 1.1.1 | H100 PCIe 80 GB | 63.43 · 104 / 387 / 319 ms | **74.06** · 245 / 310 / 296 ms |
+| 1.1.1 | RTX PRO 6000 Blackwell Server Edition | 63.46 · 119 / 403 / 320 ms | not run |
 | 1.1.0 | H100 PCIe 80 GB | 60.20 · 95 / 357 / 279 ms | 73.54 · 234 / 300 / 288 ms |
 | 1.1.0 | RTX PRO 6000 Blackwell Server Edition | 60.23 · 97 / 393 / 312 ms | 73.38 · 245 / 299 / 295 ms |
 
@@ -67,7 +68,7 @@ ENGINE=trt CHECKPOINT=nvfp4 VISION=false docker compose up -d
 | --- | --- | --- |
 | `ENGINE` | `lean` | `lean`: each pass of a request is one forward over its prompts laid out as a token tree (BF16); `trt`: TensorRT-LLM, as in 1.0.1 (needed for `nvfp4`) |
 | `CHECKPOINT` | `bf16` | `bf16` or `nvfp4` (with `ENGINE=trt`) |
-| `DEFAULT_EFFORT` | `high` | Effort of requests that name none: `low`, `medium` or `high` |
+| `DEFAULT_EFFORT` | `xhigh` | Effort of requests that name none: `low`, `medium`, `high` or `xhigh` |
 | `GPU` | `0` | Physical GPU ordinal |
 | `PORT` | `30104` | Playground and API port |
 | `HOST` | `127.0.0.1` | `0.0.0.0` accepts remote clients; set `API_KEY` too |
@@ -101,15 +102,16 @@ The default engine lays out all branches of a request as one token tree: the sys
 
 ## Effort
 
-Each request can trade accuracy for latency with a header (`X-Decision-Effort: low`) or a field (`"options": {"effort": "low"}`); clients that send neither, including the Decision Index kit, get `high`.
+Each request can trade accuracy for latency with a header (`X-Decision-Effort: low`) or a field (`"options": {"effort": "low"}`); clients that send neither, including the Decision Index kit, get `xhigh`.
 
 | `effort` | What each question gets | Branches / question | Decision Index 0.3 |
 | --- | --- | --- | --- |
 | `low` | one order | 1.0 | 62.45 |
 | `medium` | two orders; rating of every two-option question in both orders; temperature on the rest | 3.34 | no full run |
-| `high` (default) | all four views above | 3.43 | 63.43 |
+| `high` | all four views above | 3.43 | 63.43 |
+| `xhigh` (default) | `high` without the rating, with the request's input written twice in the shared prefix (once when twice would not fit the context) | 2.08 | 64.72 |
 
-The index is the full public part with 1.1.1, BF16 on H100 PCIe 80 GB (`low`: 70 / 228 / 201 ms median / p80 / mean per request; `high`: 104 / 387 / 319 ms); `medium` has no full run. Every response reports the effort that ran in `usage.effort`. Request and response format, status codes and the playground: [docs/api.md](docs/api.md).
+The index is the full public part with 1.1.1, BF16 on H100 PCIe 80 GB (`low`: 70 / 228 / 201 ms median / p80 / mean per request; `high`: 104 / 387 / 319 ms); `medium` has no full run. `xhigh` is the same full public part on the same GPU type, with held-out accuracy unchanged against `high`; on a 2,000-request uniform sample of the index it ran at 106 / 452 / 345 ms. Every response reports the effort that ran in `usage.effort`. Request and response format, status codes and the playground: [docs/api.md](docs/api.md).
 
 ## Repository layout
 
